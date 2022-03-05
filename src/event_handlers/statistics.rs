@@ -103,7 +103,7 @@ impl StatsHandler {
                 Command::AddToUsizeField(field, value) => {
                     self.stats.update_usize_field(field, value);
 
-                    if matches!(field, StatField::TotalScans) {
+                    if matches!(field, StatField::TotalScans | StatField::TotalExpected) {
                         self.bar.set_length(self.stats.total_expected() as u64);
                     }
                 }
@@ -155,7 +155,7 @@ impl StatsHandler {
     pub fn initialize(config: Arc<Configuration>) -> (Joiner, StatsHandle) {
         log::trace!("enter: initialize");
 
-        let data = Arc::new(Stats::new(config.extensions.len(), config.json));
+        let data = Arc::new(Stats::new(config.json));
         let (tx, rx): FeroxChannel<Command> = mpsc::unbounded_channel();
 
         let mut handler = StatsHandler::new(data.clone(), rx);

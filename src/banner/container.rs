@@ -3,7 +3,7 @@ use crate::{
     config::Configuration,
     event_handlers::Handles,
     utils::{logged_request, status_colorizer},
-    VERSION,
+    DEFAULT_IGNORED_EXTENSIONS, DEFAULT_METHOD, VERSION,
 };
 use anyhow::{bail, Result};
 use console::{style, Emoji};
@@ -98,6 +98,12 @@ pub struct Banner {
     /// represents Configuration.extensions
     extensions: BannerEntry,
 
+    /// represents Configuration.methods
+    methods: BannerEntry,
+
+    /// represents Configuration.data
+    data: BannerEntry,
+
     /// represents Configuration.insecure
     insecure: BannerEntry,
 
@@ -145,6 +151,18 @@ pub struct Banner {
 
     /// whether or not there is a known new version
     pub(super) update_status: UpdateStatus,
+
+    /// represents Configuration.collect_extensions
+    collect_extensions: BannerEntry,
+
+    /// represents Configuration.dont_collect
+    dont_collect: BannerEntry,
+
+    /// represents Configuration.collect_backups
+    collect_backups: BannerEntry,
+
+    /// represents Configuration.collect_words
+    collect_words: BannerEntry,
 }
 
 /// implementation of Banner
@@ -302,6 +320,38 @@ impl Banner {
             "Extensions",
             &format!("[{}]", config.extensions.join(", ")),
         );
+        let methods = BannerEntry::new(
+            "🏁",
+            "HTTP methods",
+            &format!("[{}]", config.methods.join(", ")),
+        );
+
+        let dont_collect = if config.dont_collect == DEFAULT_IGNORED_EXTENSIONS {
+            // default has 30+ extensions, just trim it up
+            BannerEntry::new(
+                "💸",
+                "Ignored Extensions",
+                "[Images, Movies, Audio, etc...]",
+            )
+        } else {
+            BannerEntry::new(
+                "💸",
+                "Ignored Extensions",
+                &format!("[{}]", config.dont_collect.join(", ")),
+            )
+        };
+
+        let offset = std::cmp::min(config.data.len(), 30);
+        let data = String::from_utf8(config.data[..offset].to_vec())
+            .unwrap_or_else(|_err| {
+                format!(
+                    "{:x?} ...",
+                    &config.data[..std::cmp::min(config.data.len(), 13)]
+                )
+            })
+            .replace('\n', " ")
+            .replace('\r', "");
+        let data = BannerEntry::new("💣", "HTTP Body", &data);
         let insecure = BannerEntry::new("🔓", "Insecure", &config.insecure.to_string());
         let redirects = BannerEntry::new("📍", "Follow Redirects", &config.redirects.to_string());
         let dont_filter =
@@ -311,6 +361,16 @@ impl Banner {
         let parallel = BannerEntry::new("🛤", "Parallel Scans", &config.parallel.to_string());
         let rate_limit =
             BannerEntry::new("🚧", "Requests per Second", &config.rate_limit.to_string());
+        let collect_extensions = BannerEntry::new(
+            "💰",
+            "Collect Extensions",
+            &config.collect_extensions.to_string(),
+        );
+        let collect_backups =
+            BannerEntry::new("🏦", "Collect Backups", &config.collect_backups.to_string());
+
+        let collect_words =
+            BannerEntry::new("🤑", "Collect Words", &config.collect_words.to_string());
 
         Self {
             targets,
@@ -339,6 +399,8 @@ impl Banner {
             output,
             debug_log,
             extensions,
+            methods,
+            data,
             insecure,
             dont_filter,
             redirects,
@@ -349,6 +411,10 @@ impl Banner {
             scan_limit,
             time_limit,
             url_denylist,
+            collect_extensions,
+            collect_backups,
+            collect_words,
+            dont_collect,
             config: cfg,
             version: VERSION.to_string(),
             update_status: UpdateStatus::Unknown,
@@ -380,7 +446,7 @@ by Ben "epi" Risher {}                 ver: {}"#,
         let instructions = format!(
             " 🏁  Press [{}] to use the {}™",
             style("ENTER").yellow(),
-            style("Scan Cancel Menu").bright().yellow(),
+            style("Scan Management Menu").bright().yellow(),
         );
 
         format!("{}\n{}\n{}", bottom, instructions, addl_section)
@@ -395,7 +461,7 @@ by Ben "epi" Risher {}                 ver: {}"#,
 
         let api_url = Url::parse(url)?;
 
-        let result = logged_request(&api_url, handles.clone()).await?;
+        let result = logged_request(&api_url, DEFAULT_METHOD, None, handles.clone()).await?;
         let body = result.text().await?;
 
         let json_response: Value = serde_json::from_str(&body)?;
@@ -523,6 +589,28 @@ by Ben "epi" Risher {}                 ver: {}"#,
 
         if !config.extensions.is_empty() {
             writeln!(&mut writer, "{}", self.extensions)?;
+        }
+
+        if config.collect_extensions {
+            // dont-collect is active only when collect-extensions is used
+            writeln!(&mut writer, "{}", self.collect_extensions)?;
+            writeln!(&mut writer, "{}", self.dont_collect)?;
+        }
+
+        if config.collect_backups {
+            writeln!(&mut writer, "{}", self.collect_backups)?;
+        }
+
+        if config.collect_words {
+            writeln!(&mut writer, "{}", self.collect_words)?;
+        }
+
+        if !config.methods.is_empty() {
+            writeln!(&mut writer, "{}", self.methods)?;
+        }
+
+        if !config.data.is_empty() {
+            writeln!(&mut writer, "{}", self.data)?;
         }
 
         if config.insecure {

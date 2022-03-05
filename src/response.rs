@@ -7,9 +7,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use console::style;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
-    Response, StatusCode, Url,
+    Method, Response, StatusCode, Url,
 };
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -30,8 +31,14 @@ pub struct FeroxResponse {
     /// The final `Url` of this `FeroxResponse`
     url: Url,
 
+    /// The original url from which the final `Url` was derived
+    original_url: String,
+
     /// The `StatusCode` of this `FeroxResponse`
     status: StatusCode,
+
+    /// The HTTP Request `Method` of this `FeroxResponse`
+    method: Method,
 
     /// The full response text
     text: String,
@@ -53,6 +60,9 @@ pub struct FeroxResponse {
 
     /// whether the user passed --quiet|--silent on the command line
     pub(crate) output_level: OutputLevel,
+
+    /// Url's file extension, if one exists
+    pub(crate) extension: Option<String>,
 }
 
 /// implement Default trait for FeroxResponse
@@ -61,7 +71,9 @@ impl Default for FeroxResponse {
     fn default() -> Self {
         Self {
             url: Url::parse("http://localhost").unwrap(),
+            original_url: "".to_string(),
             status: Default::default(),
+            method: Method::default(),
             text: "".to_string(),
             content_length: 0,
             line_count: 0,
@@ -69,6 +81,7 @@ impl Default for FeroxResponse {
             headers: Default::default(),
             wildcard: false,
             output_level: Default::default(),
+            extension: None,
         }
     }
 }
@@ -79,8 +92,9 @@ impl fmt::Display for FeroxResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "FeroxResponse {{ url: {}, status: {}, content-length: {} }}",
+            "FeroxResponse {{ url: {}, method: {}, status: {}, content-length: {} }}",
             self.url(),
+            self.method(),
             self.status(),
             self.content_length()
         )
@@ -92,6 +106,11 @@ impl FeroxResponse {
     /// Get the `StatusCode` of this `FeroxResponse`
     pub fn status(&self) -> &StatusCode {
         &self.status
+    }
+
+    /// Get the `Method` of this `FeroxResponse`
+    pub fn method(&self) -> &Method {
+        &self.method
     }
 
     /// Get the `wildcard` of this `FeroxResponse`
@@ -186,34 +205,32 @@ impl FeroxResponse {
     }
 
     /// Create a new `FeroxResponse` from the given `Response`
-    pub async fn from(response: Response, read_body: bool, output_level: OutputLevel) -> Self {
+    pub async fn from(
+        response: Response,
+        original_url: &str,
+        method: &str,
+        output_level: OutputLevel,
+    ) -> Self {
         let url = response.url().clone();
         let status = response.status();
         let headers = response.headers().clone();
         let content_length = response.content_length().unwrap_or(0);
 
-        let text = if read_body {
-            // .text() consumes the response, must be called last
-            // additionally, --extract-links is currently the only place we use the body of the
-            // response, so we forego the processing if not performing extraction
-            match response.text().await {
-                // await the response's body
-                Ok(text) => text,
-                Err(e) => {
-                    log::warn!("Could not parse body from response: {}", e);
-                    String::new()
-                }
-            }
-        } else {
-            String::new()
-        };
+        // .text() consumes the response, must be called last
+        let text = response
+            .text()
+            .await
+            .with_context(|| "Could not parse body from response")
+            .unwrap_or_default();
 
         let line_count = text.lines().count();
         let word_count = text.lines().map(|s| s.split_whitespace().count()).sum();
 
         FeroxResponse {
             url,
+            original_url: original_url.to_string(),
             status,
+            method: Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET),
             content_length,
             text,
             headers,
@@ -221,7 +238,63 @@ impl FeroxResponse {
             word_count,
             output_level,
             wildcard: false,
+            extension: None,
         }
+    }
+
+    /// if --collect-extensions is used, examine the response's url and grab the file's extension
+    /// if one is available to be grabbed. If an extension is found, send it to the ScanHandler
+    /// for further processing
+    pub(crate) fn parse_extension(&mut self, handles: Arc<Handles>) -> Result<()> {
+        log::trace!("enter: parse_extension");
+
+        if !handles.config.collect_extensions {
+            // early return, --collect-extensions not used
+            return Ok(());
+        }
+
+        // path_segments:
+        //   Return None for cannot-be-a-base URLs.
+        //   When Some is returned, the iterator always contains at least one string
+        //     (which may be empty).
+        //
+        // meaning: the two unwraps here are fine, the worst outcome is an empty string
+        let filename = self.url.path_segments().unwrap().last().unwrap();
+
+        if !filename.is_empty() {
+            // non-empty string, try to get extension
+            let parts: Vec<_> = filename
+                .split('.')
+                // keep things like /.bash_history from becoming an extension
+                .filter(|part| !part.is_empty())
+                .collect();
+
+            if parts.len() > 1 {
+                // filename + at least one extension, i.e. whatever.js becomes ["whatever", "js"]
+                self.extension = Some(parts.last().unwrap().to_string())
+            }
+        }
+
+        if let Some(extension) = &self.extension {
+            if handles
+                .config
+                .status_codes
+                .contains(&self.status().as_u16())
+            {
+                // only add extensions to those responses that pass our checks; filtered out
+                // status codes are handled by should_filter, but we need to still check against
+                // the allow list for what we want to keep
+                #[cfg(test)]
+                handles
+                    .send_scan_command(Command::AddDiscoveredExtension(extension.to_owned()))
+                    .unwrap_or_default();
+                #[cfg(not(test))]
+                handles.send_scan_command(Command::AddDiscoveredExtension(extension.to_owned()))?;
+            }
+        }
+
+        log::trace!("exit: parse_extension");
+        Ok(())
     }
 
     /// Helper function that determines if the configured maximum recursion depth has been reached
@@ -326,7 +399,32 @@ impl FeroxSerialize for FeroxResponse {
         let words = self.word_count().to_string();
         let chars = self.content_length().to_string();
         let status = self.status().as_str();
+        let method = self.method().as_str();
         let wild_status = status_colorizer("WLD");
+
+        let mut url_with_redirect = match (
+            self.status().is_redirection(),
+            self.headers().get("Location").is_some(),
+        ) {
+            (true, true) => {
+                // redirect with Location header, show where it goes if possible
+                let loc = self
+                    .headers()
+                    .get("Location")
+                    .unwrap() // known Some() already
+                    .to_str()
+                    .unwrap_or("Unknown");
+
+                // prettify the redirect target
+                let loc = style(loc).yellow();
+
+                format!("{} => {loc}", self.url())
+            }
+            _ => {
+                // no redirect, just use the normal url
+                self.url().to_string()
+            }
+        };
 
         if self.wildcard && matches!(self.output_level, OutputLevel::Default | OutputLevel::Quiet) {
             // --silent was not used and response is a wildcard, special messages abound when
@@ -334,8 +432,9 @@ impl FeroxSerialize for FeroxResponse {
 
             // create the base message
             let mut message = format!(
-                "{} {:>8}l {:>8}w {:>8}c Got {} for {} (url length: {})\n",
+                "{} {:>8} {:>8}l {:>8}w {:>8}c Got {} for {} (url length: {})\n",
                 wild_status,
+                method,
                 lines,
                 words,
                 chars,
@@ -345,34 +444,26 @@ impl FeroxSerialize for FeroxResponse {
             );
 
             if self.status().is_redirection() {
-                // when it's a redirect, show where it goes, if possible
-                if let Some(next_loc) = self.headers().get("Location") {
-                    let next_loc_str = next_loc.to_str().unwrap_or("Unknown");
+                // initial wildcard messages are wordy enough, put the redirect by itself
+                url_with_redirect = format!(
+                    "{} {:>9} {:>9} {:>9} {}\n",
+                    wild_status, "-", "-", "-", url_with_redirect
+                );
 
-                    let redirect_msg = format!(
-                        "{} {:>9} {:>9} {:>9} {} redirects to => {}\n",
-                        wild_status,
-                        "-",
-                        "-",
-                        "-",
-                        self.url(),
-                        next_loc_str
-                    );
-
-                    message.push_str(&redirect_msg);
-                }
+                // base message + redirection message (either empty string or redir msg)
+                message.push_str(&url_with_redirect);
             }
 
-            // base message + redirection message (if appropriate)
             message
         } else {
             // not a wildcard, just create a normal entry
             utils::create_report_string(
                 self.status.as_str(),
+                method,
                 &lines,
                 &words,
                 &chars,
-                self.url().as_str(),
+                &url_with_redirect,
                 self.output_level,
             )
         }
@@ -423,7 +514,7 @@ impl Serialize for FeroxResponse {
         S: Serializer,
     {
         let mut headers = HashMap::new();
-        let mut state = serializer.serialize_struct("FeroxResponse", 7)?;
+        let mut state = serializer.serialize_struct("FeroxResponse", 8)?;
 
         // need to convert the HeaderMap to a HashMap in order to pass it to the serializer
         for (key, value) in &self.headers {
@@ -434,13 +525,19 @@ impl Serialize for FeroxResponse {
 
         state.serialize_field("type", "response")?;
         state.serialize_field("url", self.url.as_str())?;
+        state.serialize_field("original_url", self.original_url.as_str())?;
         state.serialize_field("path", self.url.path())?;
         state.serialize_field("wildcard", &self.wildcard)?;
         state.serialize_field("status", &self.status.as_u16())?;
+        state.serialize_field("method", &self.method.as_str())?;
         state.serialize_field("content_length", &self.content_length)?;
         state.serialize_field("line_count", &self.line_count)?;
         state.serialize_field("word_count", &self.word_count)?;
         state.serialize_field("headers", &headers)?;
+        state.serialize_field(
+            "extension",
+            self.extension.as_ref().unwrap_or(&String::new()),
+        )?;
 
         state.end()
     }
@@ -455,7 +552,9 @@ impl<'de> Deserialize<'de> for FeroxResponse {
     {
         let mut response = Self {
             url: Url::parse("http://localhost").unwrap(),
+            original_url: String::new(),
             status: StatusCode::OK,
+            method: Method::GET,
             text: String::new(),
             content_length: 0,
             headers: HeaderMap::new(),
@@ -463,6 +562,7 @@ impl<'de> Deserialize<'de> for FeroxResponse {
             output_level: Default::default(),
             line_count: 0,
             word_count: 0,
+            extension: None,
         };
 
         let map: HashMap<String, Value> = HashMap::deserialize(deserializer)?;
@@ -476,6 +576,11 @@ impl<'de> Deserialize<'de> for FeroxResponse {
                         }
                     }
                 }
+                "original_url" => {
+                    if let Some(og_url) = value.as_str() {
+                        response.original_url = String::from(og_url);
+                    }
+                }
                 "status" => {
                     if let Some(num) = value.as_u64() {
                         if let Ok(smaller) = u16::try_from(num) {
@@ -483,6 +588,11 @@ impl<'de> Deserialize<'de> for FeroxResponse {
                                 response.status = status;
                             }
                         }
+                    }
+                }
+                "method" => {
+                    if let Some(method) = value.as_str() {
+                        response.method = Method::from_bytes(method.as_bytes()).unwrap_or_default();
                     }
                 }
                 "content_length" => {
@@ -521,6 +631,11 @@ impl<'de> Deserialize<'de> for FeroxResponse {
                         response.wildcard = result;
                     }
                 }
+                "extension" => {
+                    if let Some(result) = value.as_str() {
+                        response.extension = Some(result.to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -532,6 +647,8 @@ impl<'de> Deserialize<'de> for FeroxResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Configuration;
+    use std::default::Default;
 
     #[test]
     /// call reached_max_depth with max depth of zero, which is infinite recursion, expect false
@@ -540,14 +657,7 @@ mod tests {
         let url = Url::parse("http://localhost").unwrap();
         let response = FeroxResponse {
             url,
-            status: Default::default(),
-            text: "".to_string(),
-            content_length: 0,
-            line_count: 0,
-            word_count: 0,
-            headers: Default::default(),
-            wildcard: false,
-            output_level: Default::default(),
+            ..Default::default()
         };
         let result = response.reached_max_depth(0, 0, handles);
         assert!(!result);
@@ -561,14 +671,7 @@ mod tests {
         let url = Url::parse("http://localhost/one/two").unwrap();
         let response = FeroxResponse {
             url,
-            status: Default::default(),
-            text: "".to_string(),
-            content_length: 0,
-            line_count: 0,
-            word_count: 0,
-            headers: Default::default(),
-            wildcard: false,
-            output_level: Default::default(),
+            ..Default::default()
         };
 
         let result = response.reached_max_depth(0, 2, handles);
@@ -582,14 +685,7 @@ mod tests {
         let url = Url::parse("http://localhost").unwrap();
         let response = FeroxResponse {
             url,
-            status: Default::default(),
-            text: "".to_string(),
-            content_length: 0,
-            line_count: 0,
-            word_count: 0,
-            headers: Default::default(),
-            wildcard: false,
-            output_level: Default::default(),
+            ..Default::default()
         };
 
         let result = response.reached_max_depth(0, 2, handles);
@@ -603,14 +699,7 @@ mod tests {
         let url = Url::parse("http://localhost/one/two").unwrap();
         let response = FeroxResponse {
             url,
-            status: Default::default(),
-            text: "".to_string(),
-            content_length: 0,
-            line_count: 0,
-            word_count: 0,
-            headers: Default::default(),
-            wildcard: false,
-            output_level: Default::default(),
+            ..Default::default()
         };
 
         let result = response.reached_max_depth(2, 2, handles);
@@ -624,17 +713,71 @@ mod tests {
         let url = Url::parse("http://localhost/one/two/three").unwrap();
         let response = FeroxResponse {
             url,
-            status: Default::default(),
-            text: "".to_string(),
-            content_length: 0,
-            line_count: 0,
-            word_count: 0,
-            headers: Default::default(),
-            wildcard: false,
-            output_level: Default::default(),
+            ..Default::default()
         };
 
         let result = response.reached_max_depth(0, 2, handles);
         assert!(result);
+    }
+
+    #[test]
+    /// simple case of a single extension gets parsed correctly and stored on the `FeroxResponse`
+    fn parse_extension_finds_simple_extension() {
+        let config = Configuration {
+            collect_extensions: true,
+            ..Default::default()
+        };
+
+        let (handles, _) = Handles::for_testing(None, Some(Arc::new(config)));
+
+        let url = Url::parse("http://localhost/derp.js").unwrap();
+
+        let mut response = FeroxResponse {
+            url,
+            ..Default::default()
+        };
+
+        response.parse_extension(Arc::new(handles)).unwrap();
+
+        assert_eq!(response.extension, Some(String::from("js")));
+    }
+
+    #[test]
+    /// hidden files shouldn't be parsed as extensions, i.e. `/.bash_history`
+    fn parse_extension_ignores_hidden_files() {
+        let config = Configuration {
+            collect_extensions: true,
+            ..Default::default()
+        };
+
+        let (handles, _) = Handles::for_testing(None, Some(Arc::new(config)));
+
+        let url = Url::parse("http://localhost/.bash_history").unwrap();
+
+        let mut response = FeroxResponse {
+            url,
+            ..Default::default()
+        };
+
+        response.parse_extension(Arc::new(handles)).unwrap();
+
+        assert_eq!(response.extension, None);
+    }
+
+    #[test]
+    /// `parse_extension` should return immediately if `--collect-extensions` isn't used
+    fn parse_extension_early_returns_based_on_config() {
+        let (handles, _) = Handles::for_testing(None, None);
+
+        let url = Url::parse("http://localhost/derp.js").unwrap();
+
+        let mut response = FeroxResponse {
+            url,
+            ..Default::default()
+        };
+
+        response.parse_extension(Arc::new(handles)).unwrap();
+
+        assert_eq!(response.extension, None);
     }
 }

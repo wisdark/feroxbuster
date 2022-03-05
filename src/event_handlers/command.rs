@@ -5,6 +5,7 @@ use tokio::sync::oneshot::Sender;
 
 use crate::response::FeroxResponse;
 use crate::{
+    message::FeroxMessage,
     statistics::{StatError, StatField},
     traits::FeroxFilter,
 };
@@ -48,6 +49,9 @@ pub enum Command {
     /// Send a group of urls to be scanned (only used for the urls passed in explicitly by the user)
     ScanInitialUrls(Vec<String>),
 
+    /// Send a single url to be scanned (presumably added from the interactive menu)
+    ScanNewUrl(String),
+
     /// Determine whether or not recursion is appropriate, given a FeroxResponse, if so start a scan
     TryRecursion(Box<FeroxResponse>),
 
@@ -62,6 +66,12 @@ pub enum Command {
 
     /// Just receive a sender and reply, used for slowing down the main thread
     Sync(Sender<bool>),
+
+    /// Notify event handler that a new extension has been seen
+    AddDiscoveredExtension(String),
+
+    /// Write an arbitrary string to disk
+    WriteToDisk(Box<FeroxMessage>),
 
     /// Break out of the (infinite) mpsc receive loop
     Exit,

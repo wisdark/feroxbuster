@@ -303,7 +303,7 @@ fn ferox_scans_serialize() {
 #[test]
 /// given a FeroxResponses, test that it serializes into the proper JSON entry
 fn ferox_responses_serialize() {
-    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","path":"/css","wildcard":true,"status":301,"content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"}}"#;
+    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","original_url":"https://nerdcore.com","path":"/css","wildcard":true,"status":301,"method":"GET","content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":""}"#;
     let response: FeroxResponse = serde_json::from_str(json_response).unwrap();
 
     let responses = FeroxResponses::default();
@@ -321,7 +321,7 @@ fn ferox_responses_serialize() {
 /// given a FeroxResponse, test that it serializes into the proper JSON entry
 fn ferox_response_serialize_and_deserialize() {
     // deserialize
-    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","path":"/css","wildcard":true,"status":301,"content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"}}"#;
+    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","original_url":"https://nerdcore.com","path":"/css","wildcard":true,"status":301,"method":"GET","content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":""}"#;
     let response: FeroxResponse = serde_json::from_str(json_response).unwrap();
 
     assert_eq!(response.url().as_str(), "https://nerdcore.com/css");
@@ -351,33 +351,42 @@ fn feroxstates_feroxserialize_implementation() {
     );
     let ferox_scans = FeroxScans::default();
     let saved_id = ferox_scan.id.clone();
+
     ferox_scans.insert(ferox_scan);
 
-    let config = Configuration::new().unwrap();
-    let stats = Arc::new(Stats::new(config.extensions.len(), config.json));
+    ferox_scans
+        .collected_extensions
+        .write()
+        .unwrap()
+        .insert(String::from("php"));
 
-    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","path":"/css","wildcard":true,"status":301,"content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"}}"#;
+    let mut config = Configuration::new().unwrap();
+
+    config.collect_extensions = true;
+
+    let stats = Arc::new(Stats::new(config.json));
+
+    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","path":"/css","wildcard":true,"status":301,"content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":""}"#;
     let response: FeroxResponse = serde_json::from_str(json_response).unwrap();
     RESPONSES.insert(response);
 
-    let ferox_state = FeroxState::new(
-        Arc::new(ferox_scans),
-        Arc::new(Configuration::new().unwrap()),
-        &RESPONSES,
-        stats,
-    );
+    let ferox_state = FeroxState::new(Arc::new(ferox_scans), Arc::new(config), &RESPONSES, stats);
 
     let expected_strs = predicates::str::contains("scans: FeroxScans").and(
         predicate::str::contains("config: Configuration")
             .and(predicate::str::contains("responses: FeroxResponses"))
             .and(predicate::str::contains("nerdcore.com"))
             .and(predicate::str::contains("/css"))
-            .and(predicate::str::contains("https://spiritanimal.com")),
+            .and(predicate::str::contains("https://spiritanimal.com"))
+            .and(predicate::str::contains("php")),
     );
 
     assert!(expected_strs.eval(&ferox_state.as_str()));
 
     let json_state = ferox_state.as_json().unwrap();
+
+    println!("echo '{}'|jq", json_state); // for debugging, if the test fails, can see what's going on
+
     for expected in [
         r#""scans""#,
         &format!(r#""id":"{}""#, saved_id),
@@ -410,6 +419,8 @@ fn feroxstates_feroxserialize_implementation() {
         r#""redirects":false"#,
         r#""insecure":false"#,
         r#""extensions":[]"#,
+        r#""methods":["GET"],"#,
+        r#""data":[]"#,
         r#""headers""#,
         r#""queries":[]"#,
         r#""no_recursion":false"#,
@@ -437,19 +448,23 @@ fn feroxstates_feroxserialize_implementation() {
         r#""path":"/css""#,
         r#""wildcard":true"#,
         r#""status":301"#,
+        r#""method":"GET""#,
         r#""content_length":173"#,
         r#""line_count":10"#,
         r#""word_count":16"#,
         r#""headers""#,
         r#""server":"nginx/1.16.1"#,
+        r#""collect_extensions":true"#,
+        r#""collect_backups":false"#,
+        r#""collect_words":false"#,
+        r#""collected_extensions":["php"]"#,
+        r#""dont_collect":["tif","tiff","ico","cur","bmp","webp","svg","png","jpg","jpeg","jfif","gif","avif","apng","pjpeg","pjp","mov","wav","mpg","mpeg","mp3","mp4","m4a","m4p","m4v","ogg","webm","ogv","oga","flac","aac","3gp","css","zip","xls","xml","gz","tgz"]"#,
     ]
     .iter()
     {
         assert!(
-            predicates::str::contains(*expected).eval(&json_state),
-            "{}",
-            expected
-        )
+            predicates::str::contains(*expected).eval(&json_state)
+        );
     }
 }
 
@@ -572,11 +587,70 @@ async fn ferox_scan_abort() {
 /// and their correctness can be verified easily manually; just calling for now
 fn menu_print_header_and_footer() {
     let menu = Menu::new();
+    let menu_cmd_1 = MenuCmd::Add(String::from("http://localhost"));
+    let menu_cmd_2 = MenuCmd::Cancel(vec![0], false);
+    let menu_cmd_res_1 = MenuCmdResult::Url(String::from("http://localhost"));
+    let menu_cmd_res_2 = MenuCmdResult::NumCancelled(2);
+    println!(
+        "{:?}{:?}{:?}{:?}",
+        menu_cmd_1, menu_cmd_2, menu_cmd_res_1, menu_cmd_res_2
+    );
     menu.clear_screen();
     menu.print_header();
     menu.print_footer();
     menu.hide_progress_bars();
     menu.show_progress_bars();
+}
+
+#[test]
+/// ensure command parsing from user input results int he correct MenuCmd returned
+fn menu_get_command_input_from_user_returns_cancel() {
+    let menu = Menu::new();
+
+    for (idx, cmd) in ["cancel", "Cancel", "c", "C"].iter().enumerate() {
+        let force = idx % 2 == 0;
+
+        let full_cmd = if force {
+            format!("{} -f {}\n", cmd, idx)
+        } else {
+            format!("{} {}\n", cmd, idx)
+        };
+
+        let result = menu.get_command_input_from_user(&full_cmd).unwrap();
+
+        assert!(matches!(result, MenuCmd::Cancel(_, _)));
+
+        if let MenuCmd::Cancel(canx_list, ret_force) = result {
+            if idx == 0 {
+                assert!(canx_list.is_empty());
+            } else {
+                assert_eq!(canx_list, vec![idx]);
+            }
+            assert_eq!(force, ret_force);
+        }
+    }
+}
+
+#[test]
+/// ensure command parsing from user input results int he correct MenuCmd returned
+fn menu_get_command_input_from_user_returns_add() {
+    let menu = Menu::new();
+
+    for cmd in ["add", "Addd", "a", "A", "None"] {
+        let test_url = "http://happyfuntimes.commmm";
+        let full_cmd = format!("{} {}\n", cmd, test_url);
+
+        if cmd != "None" {
+            let result = menu.get_command_input_from_user(&full_cmd).unwrap();
+            assert!(matches!(result, MenuCmd::Add(_)));
+
+            if let MenuCmd::Add(url) = result {
+                assert_eq!(url, test_url);
+            }
+        } else {
+            assert!(menu.get_command_input_from_user(&full_cmd).is_none());
+        };
+    }
 }
 
 #[test]
