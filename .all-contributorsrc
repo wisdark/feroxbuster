@@ -375,6 +375,80 @@
       "contributions": [
         "ideas"
       ]
+    },
+    {
+      "login": "gtjamesa",
+      "name": "James",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2078364?v=4",
+      "profile": "https://github.com/gtjamesa",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "jhaddix",
+      "name": "Jason Haddix",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3488554?v=4",
+      "profile": "https://twitter.com/Jhaddix",
+      "contributions": [
+        "ideas",
+        "bug"
+      ]
+    },
+    {
+      "login": "ThisLimn0",
+      "name": "Limn0",
+      "avatar_url": "https://avatars.githubusercontent.com/u/67125885?v=4",
+      "profile": "https://github.com/ThisLimn0",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "0xdf223",
+      "name": "0xdf",
+      "avatar_url": "https://avatars.githubusercontent.com/u/76954092?v=4",
+      "profile": "https://github.com/0xdf223",
+      "contributions": [
+        "bug",
+        "ideas"
+      ]
+    },
+    {
+      "login": "Flangyver",
+      "name": "Flangyver",
+      "avatar_url": "https://avatars.githubusercontent.com/u/59575870?v=4",
+      "profile": "https://github.com/Flangyver",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "DonatoReis",
+      "name": "PeakyBlinder",
+      "avatar_url": "https://avatars.githubusercontent.com/u/93531354?v=4",
+      "profile": "https://github.com/DonatoReis",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "postmodern",
+      "name": "Postmodern",
+      "avatar_url": "https://avatars.githubusercontent.com/u/12671?v=4",
+      "profile": "https://postmodern.github.io/",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "herrcykel",
+      "name": "O",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1936757?v=4",
+      "profile": "https://github.com/herrcykel",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,

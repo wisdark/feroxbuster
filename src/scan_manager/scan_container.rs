@@ -1,5 +1,12 @@
 use super::scan::ScanType;
 use super::*;
+use crate::event_handlers::Handles;
+use crate::filters::{
+    EmptyFilter, LinesFilter, RegexFilter, SimilarityFilter, SizeFilter, StatusCodeFilter,
+    WildcardFilter, WordsFilter,
+};
+use crate::traits::FeroxFilter;
+use crate::Command::AddFilter;
 use crate::{
     config::OutputLevel,
     progress::PROGRESS_PRINTER,
@@ -7,9 +14,10 @@ use crate::{
     scan_manager::{MenuCmd, MenuCmdResult},
     scanner::RESPONSES,
     traits::FeroxSerialize,
-    SLEEP_DURATION,
+    Command, SLEEP_DURATION,
 };
 use anyhow::Result;
+use console::style;
 use reqwest::StatusCode;
 use serde::{ser::SerializeSeq, Serialize, Serializer};
 use std::{
@@ -67,7 +75,7 @@ impl Serialize for FeroxScans {
                 let mut seq = serializer.serialize_seq(Some(scans.len() + 1))?;
 
                 for scan in scans.iter() {
-                    seq.serialize_element(&*scan).unwrap_or_default();
+                    seq.serialize_element(scan).unwrap_or_default();
                 }
                 seq.end()
             }
@@ -117,7 +125,7 @@ impl FeroxScans {
     }
 
     /// load serialized FeroxScan(s) and any previously collected extensions into this FeroxScans  
-    pub fn add_serialized_scans(&self, filename: &str) -> Result<()> {
+    pub fn add_serialized_scans(&self, filename: &str, handles: Arc<Handles>) -> Result<()> {
         log::trace!("enter: add_serialized_scans({})", filename);
         let file = File::open(filename)?;
 
@@ -154,6 +162,49 @@ impl FeroxScans {
             }
         }
 
+        if let Some(filters) = state.get("filters") {
+            if let Some(arr_filters) = filters.as_array() {
+                for filter in arr_filters {
+                    let final_filter: Box<dyn FeroxFilter> = if let Ok(deserialized) =
+                        serde_json::from_value::<RegexFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else if let Ok(deserialized) =
+                        serde_json::from_value::<WordsFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else if let Ok(deserialized) =
+                        serde_json::from_value::<WildcardFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else if let Ok(deserialized) =
+                        serde_json::from_value::<SizeFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else if let Ok(deserialized) =
+                        serde_json::from_value::<LinesFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else if let Ok(deserialized) =
+                        serde_json::from_value::<SimilarityFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else if let Ok(deserialized) =
+                        serde_json::from_value::<StatusCodeFilter>(filter.clone())
+                    {
+                        Box::new(deserialized)
+                    } else {
+                        Box::new(EmptyFilter {})
+                    };
+
+                    handles
+                        .filters
+                        .send(AddFilter(final_filter))
+                        .unwrap_or_default();
+                }
+            }
+        }
+
         log::trace!("exit: add_serialized_scans");
         Ok(())
     }
@@ -162,8 +213,10 @@ impl FeroxScans {
     /// on the given URL
     pub fn contains(&self, url: &str) -> bool {
         if let Ok(scans) = self.scans.read() {
+            let normalized = format!("{}/", url.trim_end_matches('/'));
+
             for scan in scans.iter() {
-                if scan.url == url {
+                if scan.normalized_url == normalized {
                     return true;
                 }
             }
@@ -174,8 +227,10 @@ impl FeroxScans {
     /// Find and return a `FeroxScan` based on the given URL
     pub fn get_scan_by_url(&self, url: &str) -> Option<Arc<FeroxScan>> {
         if let Ok(guard) = self.scans.read() {
+            let normalized = format!("{}/", url.trim_end_matches('/'));
+
             for scan in guard.iter() {
-                if scan.url == url {
+                if scan.normalized_url == normalized {
                     return Some(scan.clone());
                 }
             }
@@ -257,6 +312,8 @@ impl FeroxScans {
                 .clone()
         };
 
+        let mut printed = 0;
+
         for (i, scan) in scans.iter().enumerate() {
             if matches!(scan.scan_order, ScanOrder::Initial) || scan.task.try_lock().is_err() {
                 // original target passed in via either -u or --stdin
@@ -264,11 +321,20 @@ impl FeroxScans {
             }
 
             if matches!(scan.scan_type, ScanType::Directory) {
+                if printed == 0 {
+                    self.menu
+                        .println(&format!("{}:", style("Scans").bright().blue()));
+                }
                 // we're only interested in displaying directory scans, as those are
                 // the only ones that make sense to be stopped
                 let scan_msg = format!("{:3}: {}", i, scan);
                 self.menu.println(&scan_msg);
+                printed += 1;
             }
+        }
+
+        if printed > 0 {
+            self.menu.print_border();
         }
     }
 
@@ -320,12 +386,34 @@ impl FeroxScans {
         num_cancelled
     }
 
+    fn display_filters(&self, handles: Arc<Handles>) {
+        let mut printed = 0;
+
+        if let Ok(guard) = handles.filters.data.filters.read() {
+            for (i, filter) in guard.iter().enumerate() {
+                if i == 0 {
+                    self.menu
+                        .println(&format!("{}:", style("Filters").bright().blue()));
+                }
+
+                let filter_msg = format!("{:3}: {}", i + 1, filter);
+                self.menu.println(&filter_msg);
+                printed += 1;
+            }
+
+            if printed > 0 {
+                self.menu.print_border();
+            }
+        }
+    }
+
     /// CLI menu that allows for interactive cancellation of recursed-into directories
-    async fn interactive_menu(&self) -> Option<MenuCmdResult> {
+    async fn interactive_menu(&self, handles: Arc<Handles>) -> Option<MenuCmdResult> {
         self.menu.hide_progress_bars();
         self.menu.clear_screen();
         self.menu.print_header();
         self.display_scans().await;
+        self.display_filters(handles.clone());
         self.menu.print_footer();
 
         let menu_cmd = if let Ok(line) = self.menu.term.read_line() {
@@ -340,7 +428,15 @@ impl FeroxScans {
                 let num_cancelled = self.cancel_scans(indices, should_force).await;
                 Some(MenuCmdResult::NumCancelled(num_cancelled))
             }
-            Some(MenuCmd::Add(url)) => Some(MenuCmdResult::Url(url)),
+            Some(MenuCmd::AddUrl(url)) => Some(MenuCmdResult::Url(url)),
+            Some(MenuCmd::AddFilter(filter)) => Some(MenuCmdResult::Filter(filter)),
+            Some(MenuCmd::RemoveFilter(indices)) => {
+                handles
+                    .filters
+                    .send(Command::RemoveFilters(indices))
+                    .unwrap_or_default();
+                None
+            }
             None => None,
         };
 
@@ -395,7 +491,11 @@ impl FeroxScans {
     ///
     /// When the value stored in `PAUSE_SCAN` becomes `false`, the function returns, exiting the busy
     /// loop
-    pub async fn pause(&self, get_user_input: bool) -> Option<MenuCmdResult> {
+    pub async fn pause(
+        &self,
+        get_user_input: bool,
+        handles: Arc<Handles>,
+    ) -> Option<MenuCmdResult> {
         // function uses tokio::time, not std
 
         // local testing showed a pretty slow increase (less than linear) in CPU usage as # of
@@ -407,7 +507,7 @@ impl FeroxScans {
             INTERACTIVE_BARRIER.fetch_add(1, Ordering::Relaxed);
 
             if get_user_input {
-                command_result = self.interactive_menu().await;
+                command_result = self.interactive_menu(handles).await;
                 PAUSE_SCAN.store(false, Ordering::Relaxed);
                 self.print_known_responses();
             }
@@ -493,7 +593,8 @@ impl FeroxScans {
     ///
     /// Also return a reference to the new `FeroxScan`
     pub fn add_directory_scan(&self, url: &str, scan_order: ScanOrder) -> (bool, Arc<FeroxScan>) {
-        self.add_scan(url, ScanType::Directory, scan_order)
+        let normalized = format!("{}/", url.trim_end_matches('/'));
+        self.add_scan(&normalized, ScanType::Directory, scan_order)
     }
 
     /// Given a url, create a new `FeroxScan` and add it to `FeroxScans` as a File Scan

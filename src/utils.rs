@@ -12,16 +12,17 @@ use std::{
     time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
-use crate::config::Configuration;
 use crate::{
+    config::Configuration,
     config::OutputLevel,
     event_handlers::{
         Command::{self, AddError, AddStatus},
         Handles,
     },
     progress::PROGRESS_PRINTER,
+    response::FeroxResponse,
     send_command,
     statistics::StatError::{Connection, Other, Redirection, Request, Timeout},
     traits::FeroxSerialize,
@@ -65,6 +66,20 @@ pub fn status_colorizer(status: &str) -> String {
 /// simple wrapper to stay DRY
 pub fn fmt_err(msg: &str) -> String {
     format!("{}: {}", status_colorizer("ERROR"), msg)
+}
+
+/// given a FeroxResponse, send a TryRecursion command
+///
+/// moved to utils to allow for calls from extractor and scanner
+pub(crate) async fn send_try_recursion_command(
+    handles: Arc<Handles>,
+    response: FeroxResponse,
+) -> Result<()> {
+    handles.send_scan_command(Command::TryRecursion(Box::new(response.clone())))?;
+    let (tx, rx) = oneshot::channel::<bool>();
+    handles.send_scan_command(Command::Sync(tx))?;
+    rx.await?;
+    Ok(())
 }
 
 /// Takes in a string and colors it using console::style
@@ -146,7 +161,7 @@ pub async fn make_request(
 
     let mut request = client.request(Method::from_bytes(method.as_bytes())?, url.to_owned());
 
-    if (!config.proxy.is_empty() || config.replay_proxy.is_empty())
+    if (!config.proxy.is_empty() || !config.replay_proxy.is_empty())
         && data.is_none()
         && ["post", "put", "patch"].contains(&method.to_ascii_lowercase().as_str())
     {
@@ -254,10 +269,17 @@ pub fn create_report_string(
     } else {
         // normal printing with status and sizes
         let color_status = status_colorizer(status);
-        format!(
-            "{} {:>8} {:>8}l {:>8}w {:>8}c {}\n",
-            color_status, method, line_count, word_count, content_length, url
-        )
+        if status.contains("MSG") {
+            format!(
+                "{} {:>8} {:>9} {:>9} {:>9} {}\n",
+                color_status, method, line_count, word_count, content_length, url
+            )
+        } else {
+            format!(
+                "{} {:>8} {:>8}l {:>8}w {:>8}c {}\n",
+                color_status, method, line_count, word_count, content_length, url
+            )
+        }
     }
 }
 

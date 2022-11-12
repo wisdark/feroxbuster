@@ -6,9 +6,9 @@ use std::{
 
 use anyhow::Result;
 use lazy_static::lazy_static;
-use leaky_bucket::LeakyBucket;
+use leaky_bucket::RateLimiter;
 use tokio::{
-    sync::{oneshot, RwLock},
+    sync::RwLock,
     time::{sleep, Duration},
 };
 
@@ -16,7 +16,7 @@ use crate::{
     atomic_load, atomic_store,
     config::RequesterPolicy,
     event_handlers::{
-        Command::{self, AddError, SubtractFromUsizeField},
+        Command::{AddError, SubtractFromUsizeField},
         Handles,
     },
     extractor::{ExtractionTarget, ExtractorBuilder},
@@ -25,7 +25,7 @@ use crate::{
     scan_manager::{FeroxScan, ScanStatus},
     statistics::{StatError::Other, StatField::TotalExpected},
     url::FeroxUrl,
-    utils::{logged_request, should_deny_url},
+    utils::{logged_request, send_try_recursion_command, should_deny_url},
     HIGH_ERROR_RATIO,
 };
 
@@ -45,7 +45,7 @@ pub(super) struct Requester {
     target_url: String,
 
     /// limits requests per second if present
-    rate_limiter: RwLock<Option<LeakyBucket>>,
+    rate_limiter: RwLock<Option<RateLimiter>>,
 
     /// data regarding policy and metadata about last enforced trigger etc...
     policy_data: PolicyData,
@@ -94,18 +94,18 @@ impl Requester {
         })
     }
 
-    /// build a LeakyBucket, given a rate limit (as requests per second)
-    fn build_a_bucket(limit: usize) -> Result<LeakyBucket> {
+    /// build a RateLimiter, given a rate limit (as requests per second)
+    fn build_a_bucket(limit: usize) -> Result<RateLimiter> {
         let refill = max((limit as f64 / 10.0).round() as usize, 1); // minimum of 1 per second
         let tokens = max((limit as f64 / 2.0).round() as usize, 1);
         let interval = if refill == 1 { 1000 } else { 100 }; // 1 second if refill is 1
 
-        Ok(LeakyBucket::builder()
-            .refill_interval(Duration::from_millis(interval)) // add tokens every 0.1s
-            .refill_amount(refill) // ex: 100 req/s -> 10 tokens per 0.1s
-            .tokens(tokens) // reduce initial burst, 2 is arbitrary, but felt good
+        Ok(RateLimiter::builder()
+            .interval(Duration::from_millis(interval)) // add tokens every 0.1s
+            .refill(refill) // ex: 100 req/s -> 10 tokens per 0.1s
+            .initial(tokens) // reduce initial burst, 2 is arbitrary, but felt good
             .max(limit)
-            .build()?)
+            .build())
     }
 
     /// sleep and set a flag that can be checked by other threads
@@ -124,13 +124,12 @@ impl Requester {
 
     /// limit the number of requests per second
     pub async fn limit(&self) -> Result<()> {
-        self.rate_limiter
-            .read()
-            .await
-            .as_ref()
-            .unwrap()
-            .acquire_one()
-            .await?;
+        let guard = self.rate_limiter.read().await;
+
+        if guard.is_some() {
+            guard.as_ref().unwrap().acquire_one().await;
+        }
+
         Ok(())
     }
 
@@ -379,14 +378,14 @@ impl Requester {
                 .await;
 
                 // do recursion if appropriate
-                if !self.handles.config.no_recursion {
-                    self.handles
-                        .send_scan_command(Command::TryRecursion(Box::new(
-                            ferox_response.clone(),
-                        )))?;
-                    let (tx, rx) = oneshot::channel::<bool>();
-                    self.handles.send_scan_command(Command::Sync(tx))?;
-                    rx.await?;
+                if !self.handles.config.no_recursion && !self.handles.config.force_recursion {
+                    // to support --force-recursion, we want to limit recursive calls to only
+                    // 'found' assets. That means we need to either gate or delay the call.
+                    //
+                    // this branch will retain the 'old' behavior by checking that
+                    // --force-recursion isn't turned on
+                    send_try_recursion_command(self.handles.clone(), ferox_response.clone())
+                        .await?;
                 }
 
                 // purposefully doing recursion before filtering. the thought process is that
@@ -398,6 +397,33 @@ impl Requester {
                     .should_filter_response(&ferox_response, self.handles.stats.tx.clone())
                 {
                     continue;
+                }
+
+                if !self.handles.config.no_recursion && self.handles.config.force_recursion {
+                    // in this branch, we're saying that both recursion AND force recursion
+                    // are turned on. It comes after should_filter_response, so those cases
+                    // are handled. Now we need to account for -s/-C options.
+
+                    if self.handles.config.filter_status.is_empty() {
+                        // -C wasn't used, so -s is the only 'filter' left to account for
+                        if self
+                            .handles
+                            .config
+                            .status_codes
+                            .contains(&ferox_response.status().as_u16())
+                        {
+                            send_try_recursion_command(
+                                self.handles.clone(),
+                                ferox_response.clone(),
+                            )
+                            .await?;
+                        }
+                    } else {
+                        // -C was used, that means the filters above would have removed
+                        // those responses, and anything else should be let through
+                        send_try_recursion_command(self.handles.clone(), ferox_response.clone())
+                            .await?;
+                    }
                 }
 
                 if self.handles.config.collect_extensions {
@@ -469,6 +495,7 @@ mod tests {
     use crate::{
         config::Configuration,
         config::OutputLevel,
+        event_handlers::Command::AddStatus,
         event_handlers::{FiltersHandler, ScanHandler, StatsHandler, Tasks, TermOutHandler},
         filters,
         scan_manager::{ScanOrder, ScanType},
@@ -509,10 +536,7 @@ mod tests {
     /// helper to stay DRY
     async fn increment_errors(handles: Arc<Handles>, scan: Arc<FeroxScan>, num_errors: usize) {
         for _ in 0..num_errors {
-            handles
-                .stats
-                .send(Command::AddError(StatError::Other))
-                .unwrap();
+            handles.stats.send(AddError(StatError::Other)).unwrap();
             scan.add_error();
         }
 
@@ -549,7 +573,7 @@ mod tests {
         code: StatusCode,
     ) {
         for _ in 0..num_codes {
-            handles.stats.send(Command::AddStatus(code)).unwrap();
+            handles.stats.send(AddStatus(code)).unwrap();
             if code == StatusCode::FORBIDDEN {
                 scan.add_403();
             } else {
@@ -901,10 +925,10 @@ mod tests {
     /// decrease the scan rate
     async fn adjust_limit_resets_streak_counter_on_downward_movement() {
         let (handles, _) = setup_requester_test(None).await;
-        let mut buckets = leaky_bucket::LeakyBuckets::new();
-        let coordinator = buckets.coordinate().unwrap();
-        tokio::spawn(async move { coordinator.await.expect("coordinator errored") });
-        let limiter = buckets.rate_limiter().max(200).build().unwrap();
+        let limiter = RateLimiter::builder()
+            .interval(Duration::from_secs(1))
+            .max(200)
+            .build();
 
         let scan = FeroxScan::default();
         scan.add_error();
@@ -923,9 +947,10 @@ mod tests {
         requester.policy_data.set_reqs_sec(400);
         requester.policy_data.set_errors(1);
 
-        let mut guard = requester.tuning_lock.lock().unwrap();
-        *guard = 2;
-        drop(guard);
+        {
+            let mut guard = requester.tuning_lock.lock().unwrap();
+            *guard = 2;
+        }
 
         requester
             .adjust_limit(PolicyTrigger::Errors, false)
@@ -1012,10 +1037,10 @@ mod tests {
     /// set_rate_limiter should exit early when new limit equals the current bucket's max
     async fn set_rate_limiter_early_exit() {
         let (handles, _) = setup_requester_test(None).await;
-        let mut buckets = leaky_bucket::LeakyBuckets::new();
-        let coordinator = buckets.coordinate().unwrap();
-        tokio::spawn(async move { coordinator.await.expect("coordinator errored") });
-        let limiter = buckets.rate_limiter().max(200).build().unwrap();
+        let limiter = RateLimiter::builder()
+            .interval(Duration::from_secs(1))
+            .max(200)
+            .build();
 
         let requester = Requester {
             handles,
@@ -1044,10 +1069,10 @@ mod tests {
     async fn tune_sets_expected_values_and_then_waits() {
         let (handles, _) = setup_requester_test(None).await;
 
-        let mut buckets = leaky_bucket::LeakyBuckets::new();
-        let coordinator = buckets.coordinate().unwrap();
-        tokio::spawn(async move { coordinator.await.expect("coordinator errored") });
-        let limiter = buckets.rate_limiter().max(200).build().unwrap();
+        let limiter = RateLimiter::builder()
+            .interval(Duration::from_secs(1))
+            .max(200)
+            .build();
 
         let scan = FeroxScan::new(
             "http://localhost",

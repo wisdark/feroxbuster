@@ -5,6 +5,7 @@ use tokio::sync::oneshot::Sender;
 
 use crate::response::FeroxResponse;
 use crate::{
+    event_handlers::Handles,
     message::FeroxMessage,
     statistics::{StatError, StatField},
     traits::FeroxFilter,
@@ -43,6 +44,9 @@ pub enum Command {
     /// Add a `FeroxFilter` implementor to `FilterHandler`'s instance of `FeroxFilters`
     AddFilter(Box<dyn FeroxFilter>),
 
+    /// Remove a set of `FeroxFilter` implementors from `FeroxFilters` by index
+    RemoveFilters(Vec<usize>),
+
     /// Send a `FeroxResponse` to the output handler for reporting
     Report(Box<FeroxResponse>),
 
@@ -75,4 +79,8 @@ pub enum Command {
 
     /// Break out of the (infinite) mpsc receive loop
     Exit,
+
+    /// Give a handler access to an Arc<Handles> instance after the handler has
+    /// already been initialized
+    AddHandles(Arc<Handles>),
 }
