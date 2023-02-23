@@ -53,17 +53,17 @@ fn scanner_recursive_request_scan() -> Result<(), Box<dyn std::error::Error>> {
 
     let js_mock = srv.mock(|when, then| {
         when.method(GET).path("/js");
-        then.status(301).header("Location", &srv.url("/js/"));
+        then.status(301).header("Location", srv.url("/js/"));
     });
 
     let js_prod_mock = srv.mock(|when, then| {
         when.method(GET).path("/js/prod");
-        then.status(301).header("Location", &srv.url("/js/prod/"));
+        then.status(301).header("Location", srv.url("/js/prod/"));
     });
 
     let js_dev_mock = srv.mock(|when, then| {
         when.method(GET).path("/js/dev");
-        then.status(301).header("Location", &srv.url("/js/dev/"));
+        then.status(301).header("Location", srv.url("/js/dev/"));
     });
 
     let js_dev_file_mock = srv.mock(|when, then| {
@@ -116,17 +116,17 @@ fn scanner_recursive_request_scan_using_only_success_responses(
 
     let js_mock = srv.mock(|when, then| {
         when.method(GET).path("/js/");
-        then.status(200).header("Location", &srv.url("/js/"));
+        then.status(200).header("Location", srv.url("/js/"));
     });
 
     let js_prod_mock = srv.mock(|when, then| {
         when.method(GET).path("/js/prod/");
-        then.status(200).header("Location", &srv.url("/js/prod/"));
+        then.status(200).header("Location", srv.url("/js/prod/"));
     });
 
     let js_dev_mock = srv.mock(|when, then| {
         when.method(GET).path("/js/dev/");
-        then.status(200).header("Location", &srv.url("/js/dev/"));
+        then.status(200).header("Location", srv.url("/js/dev/"));
     });
 
     let js_dev_file_mock = srv.mock(|when, then| {
@@ -454,7 +454,7 @@ fn scanner_single_request_scan_with_debug_logging() {
         .unwrap();
 
     let contents = std::fs::read_to_string(outfile).unwrap();
-    println!("{}", contents);
+    println!("{contents}");
     assert!(contents.starts_with("Configuration {"));
     assert!(contents.contains("TRC"));
     assert!(contents.contains("DBG"));
@@ -492,7 +492,7 @@ fn scanner_single_request_scan_with_debug_logging_as_json() {
         .unwrap();
 
     let contents = std::fs::read_to_string(outfile).unwrap();
-    println!("{}", contents);
+    println!("{contents}");
     assert!(contents.starts_with("{\"type\":\"configuration\""));
     assert!(contents.contains("\"level\":\"TRACE\""));
     assert!(contents.contains("\"level\":\"DEBUG\""));
@@ -676,7 +676,7 @@ fn add_discovered_extension_updates_bars_and_stats() {
         .success();
 
     let contents = std::fs::read_to_string(file_path).unwrap();
-    println!("{}", contents);
+    println!("{contents}");
     assert!(contents.contains("discovered new extension: php"));
     assert!(contents.contains("extensions_collected: 1"));
     assert!(contents.contains("expected_per_scan: 6"));
@@ -864,7 +864,7 @@ fn scanner_forced_recursion_ignores_normal_redirect_logic() -> Result<(), Box<dy
         when.method(GET).path("/LICENSE");
         then.status(301)
             .body("this is a test")
-            .header("Location", &srv.url("/LICENSE"));
+            .header("Location", srv.url("/LICENSE"));
     });
 
     let mock2 = srv.mock(|when, then| {
@@ -896,7 +896,7 @@ fn scanner_forced_recursion_ignores_normal_redirect_logic() -> Result<(), Box<dy
         .unwrap();
 
     let contents = std::fs::read_to_string(outfile)?;
-    println!("{}", contents);
+    println!("{contents}");
 
     assert!(contents.contains("/LICENSE"));
     assert!(contents.contains("301"));

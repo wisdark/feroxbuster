@@ -138,6 +138,15 @@ impl FeroxScans {
                     let mut deser_scan: FeroxScan =
                         serde_json::from_value(scan.clone()).unwrap_or_default();
 
+                    if deser_scan.is_cancelled() {
+                        // if the scan was cancelled by the user, mark it as complete. This will
+                        // prevent the scan from being resumed as well as prevent the wordlist
+                        // from requesting it again
+                        if let Ok(mut guard) = deser_scan.status.lock() {
+                            *guard = ScanStatus::Complete;
+                        }
+                    }
+
                     // FeroxScans gets -q value from config as usual; the FeroxScans themselves
                     // rely on that value being passed in. If the user starts a scan without -q
                     // and resumes the scan but adds -q, FeroxScan will not have the proper value
@@ -262,7 +271,7 @@ impl FeroxScans {
             for (idx, _) in &matches {
                 for scan in guard.iter() {
                     let slice = url.index(0..*idx);
-                    if slice == scan.url || format!("{}/", slice).as_str() == scan.url {
+                    if slice == scan.url || format!("{slice}/").as_str() == scan.url {
                         log::trace!("enter: get_base_scan_by_url -> {}", scan);
                         return Some(scan.clone());
                     }
@@ -327,7 +336,7 @@ impl FeroxScans {
                 }
                 // we're only interested in displaying directory scans, as those are
                 // the only ones that make sense to be stopped
-                let scan_msg = format!("{:3}: {}", i, scan);
+                let scan_msg = format!("{i:3}: {scan}");
                 self.menu.println(&scan_msg);
                 printed += 1;
             }
@@ -351,7 +360,7 @@ impl FeroxScans {
                     if num >= u_scans.len() {
                         // usize can't be negative, just need to handle exceeding bounds
                         self.menu
-                            .println(&format!("The number {} is not a valid choice.", num));
+                            .println(&format!("The number {num} is not a valid choice."));
                         sleep(menu_pause_duration);
                         continue;
                     }

@@ -294,10 +294,10 @@
       ]
     },
     {
-      "login": "narkopolo",
-      "name": "narkopolo",
+      "login": "n0kovo",
+      "name": "n0kovo",
       "avatar_url": "https://avatars.githubusercontent.com/u/16690056?v=4",
-      "profile": "https://github.com/narkopolo",
+      "profile": "https://github.com/n0kovo",
       "contributions": [
         "ideas"
       ]
@@ -449,6 +449,72 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "udoprog",
+      "name": "John-John Tedro",
+      "avatar_url": "https://avatars.githubusercontent.com/u/111092?v=4",
+      "profile": "http://udoprog.github.io/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "kmanc",
+      "name": "kmanc",
+      "avatar_url": "https://avatars.githubusercontent.com/u/14863147?v=4",
+      "profile": "https://github.com/kmanc",
+      "contributions": [
+        "bug",
+        "code"
+      ]
+    },
+    {
+      "login": "hakdogpinas",
+      "name": "hakdogpinas",
+      "avatar_url": "https://avatars.githubusercontent.com/u/71529469?v=4",
+      "profile": "https://github.com/hakdogpinas",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "duokebei",
+      "name": "多可悲",
+      "avatar_url": "https://avatars.githubusercontent.com/u/75022552?v=4",
+      "profile": "https://github.com/duokebei",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "aidanhall34",
+      "name": "Aidan Hall",
+      "avatar_url": "https://avatars.githubusercontent.com/u/58670593?v=4",
+      "profile": "https://blog.ah34.net/",
+      "contributions": [
+        "code",
+        "infra"
+      ]
+    },
+    {
+      "login": "joaociocca",
+      "name": "João Ciocca",
+      "avatar_url": "https://avatars.githubusercontent.com/u/6473725?v=4",
+      "profile": "https://hachyderm.io/@JohnnyCiocca",
+      "contributions": [
+        "bug",
+        "ideas"
+      ]
+    },
+    {
+      "login": "f3rn0s",
+      "name": "f3rn0s",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1351279?v=4",
+      "profile": "https://github.com/f3rn0s",
+      "contributions": [
+        "bug"
+      ]
     }
   ],
   "contributorsPerLine": 7,
@@ -456,5 +522,6 @@
   "projectOwner": "epi052",
   "repoType": "github",
   "repoHost": "https://github.com",
-  "skipCi": true
+  "skipCi": true,
+  "commitConvention": "angular"
 }

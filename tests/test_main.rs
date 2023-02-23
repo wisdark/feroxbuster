@@ -127,7 +127,7 @@ fn main_parallel_spawns_children() -> Result<(), Box<dyn std::error::Error>> {
         );
 
     let contents = read_to_string(outfile).unwrap();
-    println!("contents: {}", contents);
+    println!("contents: {contents}");
 
     assert!(contents.contains("parallel branch && wrapped main")); // exits parallel branch
 
@@ -196,7 +196,7 @@ fn main_parallel_creates_output_directory() -> Result<(), Box<dyn std::error::Er
     let file_regex = Regex::new("ferox-[a-zA-Z_:0-9]+-[0-9]+.log").unwrap();
     let dir_regex = Regex::new("output-file-[0-9]+.logs").unwrap();
 
-    let sub_dir = output_dir.as_ref().join(&sub_dir);
+    let sub_dir = output_dir.as_ref().join(sub_dir);
 
     // created directory like output-file-1627845741.logs/
     assert!(dir_regex.is_match(&sub_dir.to_string_lossy()));

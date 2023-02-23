@@ -17,7 +17,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use reqwest::{Client, StatusCode, Url};
 use scraper::{Html, Selector};
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 
 /// Whether an active scan is recursive or not
 #[derive(Debug)]
@@ -37,6 +37,9 @@ pub struct Extractor<'a> {
 
     /// `ROBOTS_TXT_REGEX` as a regex::Regex type
     pub(super) robots_regex: Regex,
+
+    /// regex to validate a url
+    pub(super) url_regex: Regex,
 
     /// Response from which to extract links
     pub(super) response: Option<&'a FeroxResponse>,
@@ -220,6 +223,7 @@ impl<'a> Extractor<'a> {
         self.extract_links_by_attr(resp_url, links, html, "div", "src");
         self.extract_links_by_attr(resp_url, links, html, "frame", "src");
         self.extract_links_by_attr(resp_url, links, html, "embed", "src");
+        self.extract_links_by_attr(resp_url, links, html, "link", "href");
     }
 
     /// Given the body of a `reqwest::Response`, perform the following actions
@@ -332,8 +336,9 @@ impl<'a> Extractor<'a> {
         let normalized_path = self.normalize_url_path(path);
 
         // filter out any empty strings caused by .split
-        let mut parts: Vec<&str> = normalized_path
+        let mut parts: Vec<Cow<_>> = normalized_path
             .split('/')
+            .map(|s| self.url_regex.replace_all(s, ""))
             .filter(|s| !s.is_empty())
             .collect();
 
@@ -357,7 +362,7 @@ impl<'a> Extractor<'a> {
                 // this isn't the last index of the parts array
                 // ex: /buried/misc/stupidfile.php
                 // this block skips the file but sees all parent folders
-                possible_path = format!("{}/", possible_path);
+                possible_path = format!("{possible_path}/");
             }
 
             paths.push(possible_path); // good sub-path found
@@ -390,7 +395,18 @@ impl<'a> Extractor<'a> {
 
         let new_url = old_url
             .join(link)
-            .with_context(|| format!("Could not join {} with {}", old_url, link))?;
+            .with_context(|| format!("Could not join {old_url} with {link}"))?;
+
+        if old_url.domain() != new_url.domain() || old_url.host() != new_url.host() {
+            // domains/ips are not the same, don't scan things that aren't part of the original
+            // target url
+            log::debug!(
+                "Skipping {} because it's not part of the original target",
+                new_url
+            );
+            log::trace!("exit: add_link_to_set_of_links");
+            return Ok(());
+        }
 
         links.insert(new_url.to_string());
 
