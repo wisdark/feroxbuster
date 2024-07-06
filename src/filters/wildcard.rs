@@ -1,28 +1,29 @@
-use super::*;
-use crate::{url::FeroxUrl, DEFAULT_METHOD};
+use console::style;
 
-/// Data holder for two pieces of data needed when auto-filtering out wildcard responses
-///
-/// `dynamic` is the size of the response that will later be combined with the length
-/// of the path of the url requested and used to determine interesting pages from custom
-/// 404s where the requested url is reflected back in the response
-///
-/// `size` is size of the response that should be included with filters passed via runtime
-/// configuration and any static wildcard lengths.
+use super::*;
+use crate::utils::create_report_string;
+use crate::{config::OutputLevel, DEFAULT_METHOD};
+
+/// Data holder for all relevant data needed when auto-filtering out wildcard responses
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WildcardFilter {
-    /// size of the response that will later be combined with the length of the path of the url
-    /// requested
-    pub dynamic: u64,
+    /// The content-length of this response, if known
+    pub content_length: Option<u64>,
 
-    /// size of the response that should be included with filters passed via runtime configuration
-    pub size: u64,
+    /// The number of lines contained in the body of this response, if known
+    pub line_count: Option<usize>,
+
+    /// The number of words contained in the body of this response, if known
+    pub word_count: Option<usize>,
 
     /// method used in request that should be included with filters passed via runtime configuration
     pub method: String,
 
+    /// the status code returned in the response
+    pub status_code: u16,
+
     /// whether or not the user passed -D on the command line
-    pub(super) dont_filter: bool,
+    pub dont_filter: bool,
 }
 
 /// implementation of WildcardFilter
@@ -36,22 +37,23 @@ impl WildcardFilter {
     }
 }
 
-/// implement default that populates both values with u64::MAX
+/// implement default that populates `method` with its default value
 impl Default for WildcardFilter {
-    /// populate both values with u64::MAX
     fn default() -> Self {
         Self {
+            content_length: None,
+            line_count: None,
+            word_count: None,
+            method: DEFAULT_METHOD.to_string(),
+            status_code: 0,
             dont_filter: false,
-            size: u64::MAX,
-            method: DEFAULT_METHOD.to_owned(),
-            dynamic: u64::MAX,
         }
     }
 }
 
 /// implementation of FeroxFilter for WildcardFilter
 impl FeroxFilter for WildcardFilter {
-    /// Examine size, dynamic, and content_len to determine whether or not the response received
+    /// Examine size/words/lines and method to determine whether or not the response received
     /// is a wildcard response and therefore should be filtered out
     fn should_filter_response(&self, response: &FeroxResponse) -> bool {
         log::trace!("enter: should_filter_response({:?} {})", self, response);
@@ -64,44 +66,78 @@ impl FeroxFilter for WildcardFilter {
             return false;
         }
 
-        if self.size != u64::MAX
-            && self.size == response.content_length()
-            && self.method == response.method().as_str()
-        {
-            // static wildcard size found during testing
-            // size isn't default, size equals response length, and auto-filter is on
-            log::debug!("static wildcard: filtered out {}", response.url());
-            log::trace!("exit: should_filter_response -> true");
-            return true;
+        if self.method != response.method().as_str() {
+            // method's don't match, so this response should not be filtered out
+            log::trace!("exit: should_filter_response -> false");
+            return false;
         }
 
-        if self.size == u64::MAX
-            && response.content_length() == 0
-            && self.method == response.method().as_str()
-        {
-            // static wildcard size found during testing
-            // but response length was zero; pointed out by @Tib3rius
-            log::debug!("static wildcard: filtered out {}", response.url());
-            log::trace!("exit: should_filter_response -> true");
-            return true;
+        if self.status_code != response.status().as_u16() {
+            // status codes don't match, so this response should not be filtered out
+            log::trace!("exit: should_filter_response -> false");
+            return false;
         }
 
-        if self.dynamic != u64::MAX {
-            // dynamic wildcard offset found during testing
+        // methods and status codes match at this point, just need to check the other fields
 
-            // I'm about to manually split this url path instead of using reqwest::Url's
-            // builtin parsing. The reason is that they call .split() on the url path
-            // except that I don't want an empty string taking up the last index in the
-            // event that the url ends with a forward slash.  It's ugly enough to be split
-            // into its own function for readability.
-            let url_len = FeroxUrl::path_length_of_url(response.url());
-
-            if url_len + self.dynamic == response.content_length() {
-                log::debug!("dynamic wildcard: filtered out {}", response.url());
-                log::trace!("exit: should_filter_response -> true");
-                return true;
+        match (self.content_length, self.word_count, self.line_count) {
+            (Some(cl), Some(wc), Some(lc)) => {
+                if cl == response.content_length()
+                    && wc == response.word_count()
+                    && lc == response.line_count()
+                {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (Some(cl), Some(wc), None) => {
+                if cl == response.content_length() && wc == response.word_count() {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (Some(cl), None, Some(lc)) => {
+                if cl == response.content_length() && lc == response.line_count() {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (None, Some(wc), Some(lc)) => {
+                if wc == response.word_count() && lc == response.line_count() {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (Some(cl), None, None) => {
+                if cl == response.content_length() {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (None, Some(wc), None) => {
+                if wc == response.word_count() {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (None, None, Some(lc)) => {
+                if lc == response.line_count() {
+                    log::debug!("filtered out {}", response.url());
+                    log::trace!("exit: should_filter_response -> true");
+                    return true;
+                }
+            }
+            (None, None, None) => {
+                unreachable!("wildcard filter without any filters set");
             }
         }
+
         log::trace!("exit: should_filter_response -> false");
         false
     }
@@ -114,5 +150,31 @@ impl FeroxFilter for WildcardFilter {
     /// Return self as Any for dynamic dispatch purposes
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+impl std::fmt::Display for WildcardFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = create_report_string(
+            self.status_code.to_string().as_str(),
+            self.method.as_str(),
+            &self
+                .line_count
+                .map_or_else(|| "-".to_string(), |x| x.to_string()),
+            &self
+                .word_count
+                .map_or_else(|| "-".to_string(), |x| x.to_string()),
+            &self
+                .content_length
+                .map_or_else(|| "-".to_string(), |x| x.to_string()),
+            &format!(
+                "{} found {}-like response and created new filter; toggle off with {}",
+                style("Auto-filtering").bright().green(),
+                style("404").red(),
+                style("--dont-filter").yellow()
+            ),
+            OutputLevel::Default,
+        );
+        write!(f, "{}", msg)
     }
 }

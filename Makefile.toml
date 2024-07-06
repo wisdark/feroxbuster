@@ -2,6 +2,9 @@
 [tasks.upgrade]
 dependencies = ["upgrade-deps", "update"]
 
+[tasks.check]
+dependencies = ["fmt", "clippy", "test"]
+
 # cleaning
 [tasks.clean-state]
 script = """
@@ -11,7 +14,7 @@ rm ferox-*.state
 # dependency management
 [tasks.upgrade-deps]
 command = "cargo"
-args = ["upgrade", "--exclude", "indicatif"]
+args = ["upgrade", "--exclude", "indicatif, self_update"]
 
 [tasks.update]
 command = "cargo"
@@ -22,4 +25,17 @@ args = ["update"]
 clear = true
 script = """
 cargo clippy --all-targets --all-features -- -D warnings
+"""
+
+[tasks.fmt]
+clear = true
+script = """
+cargo fmt --all
+"""
+
+# tests
+[tasks.test]
+clear = true
+script = """
+cargo nextest run --all-features --all-targets
 """

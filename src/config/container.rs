@@ -1,11 +1,15 @@
 use super::utils::{
-    depth, ignored_extensions, methods, report_and_exit, save_state, serialized_type, status_codes,
-    threads, timeout, user_agent, wordlist, OutputLevel, RequesterPolicy,
+    backup_extensions, depth, extract_links, ignored_extensions, methods, report_and_exit,
+    save_state, serialized_type, status_codes, threads, timeout, user_agent, wordlist, OutputLevel,
+    RequesterPolicy,
 };
 use crate::config::determine_output_level;
 use crate::config::utils::determine_requester_policy;
 use crate::{
-    client, parser, scan_manager::resume_scan, traits::FeroxSerialize, utils::fmt_err,
+    client, parser,
+    scan_manager::resume_scan,
+    traits::FeroxSerialize,
+    utils::{fmt_err, parse_url_with_raw_path},
     DEFAULT_CONFIG_NAME,
 };
 use anyhow::{anyhow, Context, Result};
@@ -17,7 +21,7 @@ use std::{
     collections::HashMap,
     env::{current_dir, current_exe},
     fs::read_to_string,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 /// macro helper to abstract away repetitive configuration updates
@@ -99,6 +103,18 @@ pub struct Configuration {
     /// Replay Proxy to use for requests (ex: http(s)://host:port, socks5(h)://host:port)
     #[serde(default)]
     pub replay_proxy: String,
+
+    /// Path to a custom root certificate for connecting to servers with a self-signed certificate
+    #[serde(default)]
+    pub server_certs: Vec<String>,
+
+    /// Path to a client's PEM encoded X509 certificate used during mutual authentication
+    #[serde(default)]
+    pub client_cert: String,
+
+    /// Path to a client's PEM encoded PKSC #8 private key used during mutual authentication
+    #[serde(default)]
+    pub client_key: String,
 
     /// The target URL
     #[serde(default)]
@@ -214,7 +230,7 @@ pub struct Configuration {
     pub no_recursion: bool,
 
     /// Extract links from html/javscript
-    #[serde(default)]
+    #[serde(default = "extract_links")]
     pub extract_links: bool,
 
     /// Append / to each request
@@ -302,6 +318,9 @@ pub struct Configuration {
     #[serde(default)]
     pub collect_backups: bool,
 
+    #[serde(default = "backup_extensions")]
+    pub backup_extensions: Vec<String>,
+
     /// Automatically discover important words from within responses and add them to the wordlist
     #[serde(default)]
     pub collect_words: bool,
@@ -309,6 +328,10 @@ pub struct Configuration {
     /// override recursion logic to always attempt recursion, still respects --depth
     #[serde(default)]
     pub force_recursion: bool,
+
+    /// Auto update app feature
+    #[serde(skip)]
+    pub update_app: bool,
 }
 
 impl Default for Configuration {
@@ -316,14 +339,25 @@ impl Default for Configuration {
     fn default() -> Self {
         let timeout = timeout();
         let user_agent = user_agent();
-        let client = client::initialize(timeout, &user_agent, false, false, &HashMap::new(), None)
-            .expect("Could not build client");
+        let client = client::initialize(
+            timeout,
+            &user_agent,
+            false,
+            false,
+            &HashMap::new(),
+            None,
+            Vec::<String>::new(),
+            None,
+            None,
+        )
+        .expect("Could not build client");
         let replay_client = None;
         let status_codes = status_codes();
         let replay_codes = status_codes.clone();
         let kind = serialized_type();
         let output_level = OutputLevel::Default;
         let requester_policy = RequesterPolicy::Default;
+        let extract_links = extract_links();
 
         Configuration {
             kind,
@@ -332,6 +366,7 @@ impl Default for Configuration {
             user_agent,
             replay_codes,
             status_codes,
+            extract_links,
             replay_client,
             requester_policy,
             dont_filter: false,
@@ -351,14 +386,16 @@ impl Default for Configuration {
             insecure: false,
             redirects: false,
             no_recursion: false,
-            extract_links: false,
             random_agent: false,
             collect_extensions: false,
             collect_backups: false,
             collect_words: false,
             save_state: true,
             force_recursion: false,
+            update_app: false,
             proxy: String::new(),
+            client_cert: String::new(),
+            client_key: String::new(),
             config: String::new(),
             output: String::new(),
             debug_log: String::new(),
@@ -366,6 +403,7 @@ impl Default for Configuration {
             time_limit: String::new(),
             resume_from: String::new(),
             replay_proxy: String::new(),
+            server_certs: Vec::new(),
             queries: Vec::new(),
             extensions: Vec::new(),
             methods: methods(),
@@ -383,6 +421,7 @@ impl Default for Configuration {
             threads: threads(),
             wordlist: wordlist(),
             dont_collect: ignored_extensions(),
+            backup_extensions: backup_extensions(),
         }
     }
 }
@@ -393,7 +432,7 @@ impl Configuration {
     ///
     /// - **timeout**: `5` seconds
     /// - **redirects**: `false`
-    /// - **extract-links**: `false`
+    /// - **extract_links**: `true`
     /// - **wordlist**: [`DEFAULT_WORDLIST`](constant.DEFAULT_WORDLIST.html)
     /// - **config**: `None`
     /// - **threads**: `50`
@@ -415,6 +454,7 @@ impl Configuration {
     /// - **extensions**: `None`
     /// - **collect_extensions**: `false`
     /// - **collect_backups**: `false`
+    /// - **backup_extensions**: [`DEFAULT_BACKUP_EXTENSIONS`](constant.DEFAULT_BACKUP_EXTENSIONS.html)
     /// - **collect_words**: `false`
     /// - **dont_collect**: [`DEFAULT_IGNORED_EXTENSIONS`](constant.DEFAULT_RESPONSE_CODES.html)
     /// - **methods**: [`DEFAULT_METHOD`](constant.DEFAULT_METHOD.html)
@@ -441,6 +481,7 @@ impl Configuration {
     /// - **time_limit**: `None` (no limit on length of scan imposed)
     /// - **replay_proxy**: `None` (no limit on concurrent scans imposed)
     /// - **replay_codes**: [`DEFAULT_RESPONSE_CODES`](constant.DEFAULT_RESPONSE_CODES.html)
+    /// - **update_app**: `false`
     ///
     /// After which, any values defined in a
     /// [ferox-config.toml](constant.DEFAULT_CONFIG_NAME.html) config file will override the
@@ -535,9 +576,7 @@ impl Configuration {
         //   - current directory
 
         // merge a config found at /etc/feroxbuster/ferox-config.toml
-        let config_file = PathBuf::new()
-            .join("/etc/feroxbuster")
-            .join(DEFAULT_CONFIG_NAME);
+        let config_file = Path::new("/etc/feroxbuster").join(DEFAULT_CONFIG_NAME);
         Self::parse_and_merge_config(config_file, config)?;
 
         // merge a config found at ~/.config/feroxbuster/ferox-config.toml
@@ -581,7 +620,7 @@ impl Configuration {
         update_config_if_present!(&mut config.resume_from, args, "resume_from", String);
 
         if let Ok(Some(inner)) = args.try_get_one::<String>("time_limit") {
-            config.time_limit = inner.to_owned();
+            inner.clone_into(&mut config.time_limit);
         }
 
         if let Some(arg) = args.get_many::<String>("status_codes") {
@@ -605,7 +644,7 @@ impl Configuration {
                 .collect();
         } else {
             // not passed in by the user, use whatever value is held in status_codes
-            config.replay_codes = config.status_codes.clone();
+            config.replay_codes.clone_from(&config.status_codes);
         }
 
         if let Some(arg) = args.get_many::<String>("filter_status") {
@@ -619,9 +658,27 @@ impl Configuration {
         }
 
         if let Some(arg) = args.get_many::<String>("extensions") {
-            config.extensions = arg
-                .map(|val| val.trim_start_matches('.').to_string())
-                .collect();
+            let mut extensions = Vec::<String>::new();
+            for ext in arg {
+                if let Some(stripped) = ext.strip_prefix('@') {
+                    let contents = read_to_string(stripped)
+                        .unwrap_or_else(|e| report_and_exit(&e.to_string()));
+                    let exts_from_file = contents.split('\n').filter_map(|s| {
+                        let trimmed = s.trim().trim_start_matches('.');
+
+                        if trimmed.is_empty() || trimmed.starts_with('#') {
+                            None
+                        } else {
+                            Some(trimmed.to_string())
+                        }
+                    });
+
+                    extensions.extend(exts_from_file);
+                } else {
+                    extensions.push(ext.trim().trim_start_matches('.').to_string());
+                }
+            }
+            config.extensions = extensions;
         }
 
         if let Some(arg) = args.get_many::<String>("dont_collect") {
@@ -647,6 +704,11 @@ impl Configuration {
             } else {
                 config.data = arg.as_bytes().to_vec();
             }
+
+            if config.methods == methods() {
+                // if the user didn't specify a method, we're going to assume they meant to use POST
+                config.methods = vec![Method::POST.as_str().to_string()];
+            }
         }
 
         if came_from_cli!(args, "stdin") {
@@ -665,7 +727,7 @@ impl Configuration {
             for denier in arg {
                 // could be an absolute url or a regex, need to determine which and populate the
                 // appropriate vector
-                match Url::parse(denier.trim_end_matches('/')) {
+                match parse_url_with_raw_path(denier.trim_end_matches('/')) {
                     Ok(absolute) => {
                         // denier is an absolute url and can be parsed as such
                         config.url_denylist.push(absolute);
@@ -734,18 +796,22 @@ impl Configuration {
                 .collect();
         }
 
-        if came_from_cli!(args, "silent") {
+        if came_from_cli!(args, "quiet") {
+            config.quiet = true;
+            config.output_level = OutputLevel::Quiet;
+        }
+
+        if came_from_cli!(args, "silent") || (config.parallel > 0 && !config.quiet) {
             // the reason this is protected by an if statement:
             // consider a user specifying silent = true in ferox-config.toml
             // if the line below is outside of the if, we'd overwrite true with
             // false if no --silent is used on the command line
             config.silent = true;
-            config.output_level = OutputLevel::Silent;
-        }
-
-        if came_from_cli!(args, "quiet") {
-            config.quiet = true;
-            config.output_level = OutputLevel::Quiet;
+            config.output_level = if config.json {
+                OutputLevel::SilentJSON
+            } else {
+                OutputLevel::Silent
+            };
         }
 
         if came_from_cli!(args, "auto_tune")
@@ -778,6 +844,20 @@ impl Configuration {
             || came_from_cli!(args, "thorough")
         {
             config.collect_backups = true;
+            config.backup_extensions = backup_extensions();
+
+            if came_from_cli!(args, "collect_backups") {
+                if let Some(arg) = args.get_many::<String>("collect_backups") {
+                    let backup_exts = arg
+                        .map(|ext| ext.trim().to_string())
+                        .collect::<Vec<String>>();
+
+                    if !backup_exts.is_empty() {
+                        // have at least one cli backup, override the defaults
+                        config.backup_extensions = backup_exts;
+                    }
+                }
+            }
         }
 
         if came_from_cli!(args, "collect_words")
@@ -801,11 +881,8 @@ impl Configuration {
             config.add_slash = true;
         }
 
-        if came_from_cli!(args, "extract_links")
-            || came_from_cli!(args, "smart")
-            || came_from_cli!(args, "thorough")
-        {
-            config.extract_links = true;
+        if came_from_cli!(args, "dont_extract_links") {
+            config.extract_links = false;
         }
 
         if came_from_cli!(args, "json") {
@@ -816,10 +893,16 @@ impl Configuration {
             config.force_recursion = true;
         }
 
+        if came_from_cli!(args, "update_app") {
+            config.update_app = true;
+        }
+
         ////
         // organizational breakpoint; all options below alter the Client configuration
         ////
         update_config_if_present!(&mut config.proxy, args, "proxy", String);
+        update_config_if_present!(&mut config.client_cert, args, "client_cert", String);
+        update_config_if_present!(&mut config.client_key, args, "client_key", String);
         update_config_if_present!(&mut config.replay_proxy, args, "replay_proxy", String);
         update_config_if_present!(&mut config.user_agent, args, "user_agent", String);
         update_config_with_num_type_if_present!(&mut config.timeout, args, "timeout", u64);
@@ -857,7 +940,15 @@ impl Configuration {
                 // all other items in the iterator returned by split, when combined with the
                 // original split deliminator (:), make up the header's final value
                 let value = split_val.collect::<Vec<&str>>().join(":");
-                config.headers.insert(name.to_string(), value.to_string());
+
+                if value.starts_with(' ') && !value.starts_with("  ") {
+                    // first character is a space and the second character isn't
+                    // we can trim the leading space
+                    let trimmed = value.trim_start();
+                    config.headers.insert(name.to_string(), trimmed.to_string());
+                } else {
+                    config.headers.insert(name.to_string(), value.to_string());
+                }
             }
         }
 
@@ -865,15 +956,27 @@ impl Configuration {
             config.headers.insert(
                 // we know the header name is always "cookie"
                 "Cookie".to_string(),
-                // on splitting, there should be only two elements,
-                // a key and a value
                 cookies
-                    .map(|cookie| cookie.split('=').collect::<Vec<&str>>()[..].to_owned())
-                    .filter(|parts| parts.len() == 2)
-                    .map(|parts| format!("{}={}", parts[0].trim(), parts[1].trim()))
-                    // trim the spaces, join with an equals sign
+                    .flat_map(|cookie| {
+                        cookie.split(';').filter_map(|part| {
+                            // trim the spaces
+                            let trimmed = part.trim();
+                            if trimmed.is_empty() {
+                                None
+                            } else {
+                                // join with an equals sign
+                                let parts = trimmed.split('=').collect::<Vec<&str>>();
+                                Some(format!(
+                                    "{}={}",
+                                    parts[0].trim(),
+                                    parts[1..].join("").trim()
+                                ))
+                            }
+                        })
+                    })
                     .collect::<Vec<String>>()
-                    .join("; "), // join all the cookies with semicolons for the final header
+                    // join all the cookies with semicolons for the final header
+                    .join("; "),
             );
         }
 
@@ -890,6 +993,12 @@ impl Configuration {
             }
         }
 
+        if let Some(certs) = args.get_many::<String>("server_certs") {
+            for val in certs {
+                config.server_certs.push(val.to_string());
+            }
+        }
+
         config
     }
 
@@ -897,35 +1006,53 @@ impl Configuration {
     /// either the config file or command line arguments; if we have, we need to rebuild
     /// the client and store it in the config struct
     fn try_rebuild_clients(configuration: &mut Configuration) {
-        if !configuration.proxy.is_empty()
+        // check if the proxy and certificate fields are empty
+        // and parse them into Some or None variants ahead of time
+        // so we may use the is_some method on them instead of
+        // multiple initializations
+        let proxy = if configuration.proxy.is_empty() {
+            None
+        } else {
+            Some(configuration.proxy.as_str())
+        };
+
+        let server_certs = &configuration.server_certs;
+
+        let client_cert = if configuration.client_cert.is_empty() {
+            None
+        } else {
+            Some(configuration.client_cert.as_str())
+        };
+
+        let client_key = if configuration.client_key.is_empty() {
+            None
+        } else {
+            Some(configuration.client_key.as_str())
+        };
+
+        if proxy.is_some()
             || configuration.timeout != timeout()
             || configuration.user_agent != user_agent()
             || configuration.redirects
             || configuration.insecure
             || !configuration.headers.is_empty()
             || configuration.resumed
+            || !server_certs.is_empty()
+            || client_cert.is_some()
+            || client_key.is_some()
         {
-            if configuration.proxy.is_empty() {
-                configuration.client = client::initialize(
-                    configuration.timeout,
-                    &configuration.user_agent,
-                    configuration.redirects,
-                    configuration.insecure,
-                    &configuration.headers,
-                    None,
-                )
-                .expect("Could not rebuild client")
-            } else {
-                configuration.client = client::initialize(
-                    configuration.timeout,
-                    &configuration.user_agent,
-                    configuration.redirects,
-                    configuration.insecure,
-                    &configuration.headers,
-                    Some(&configuration.proxy),
-                )
-                .expect("Could not rebuild client")
-            }
+            configuration.client = client::initialize(
+                configuration.timeout,
+                &configuration.user_agent,
+                configuration.redirects,
+                configuration.insecure,
+                &configuration.headers,
+                proxy,
+                server_certs,
+                client_cert,
+                client_key,
+            )
+            .expect("Could not rebuild client");
         }
 
         if !configuration.replay_proxy.is_empty() {
@@ -938,6 +1065,9 @@ impl Configuration {
                     configuration.insecure,
                     &configuration.headers,
                     Some(&configuration.replay_proxy),
+                    server_certs,
+                    client_cert,
+                    client_key,
                 )
                 .expect("Could not rebuild client"),
             );
@@ -946,7 +1076,7 @@ impl Configuration {
 
     /// Given a configuration file's location and an instance of `Configuration`, read in
     /// the config file if found and update the current settings with the settings found therein
-    fn parse_and_merge_config(config_file: PathBuf, mut config: &mut Self) -> Result<()> {
+    fn parse_and_merge_config(config_file: PathBuf, config: &mut Self) -> Result<()> {
         if config_file.exists() {
             // save off a string version of the path before it goes out of scope
             let conf_str = config_file.to_str().unwrap_or("").to_string();
@@ -972,6 +1102,14 @@ impl Configuration {
         update_if_not_default!(&mut conf.target_url, new.target_url, "");
         update_if_not_default!(&mut conf.time_limit, new.time_limit, "");
         update_if_not_default!(&mut conf.proxy, new.proxy, "");
+        update_if_not_default!(
+            &mut conf.server_certs,
+            new.server_certs,
+            Vec::<String>::new()
+        );
+        update_if_not_default!(&mut conf.json, new.json, false);
+        update_if_not_default!(&mut conf.client_cert, new.client_cert, "");
+        update_if_not_default!(&mut conf.client_key, new.client_key, "");
         update_if_not_default!(&mut conf.verbosity, new.verbosity, 0);
         update_if_not_default!(&mut conf.silent, new.silent, false);
         update_if_not_default!(&mut conf.quiet, new.quiet, false);
@@ -981,17 +1119,18 @@ impl Configuration {
         update_if_not_default!(&mut conf.collect_backups, new.collect_backups, false);
         update_if_not_default!(&mut conf.collect_words, new.collect_words, false);
         // use updated quiet/silent values to determine output level; same for requester policy
-        conf.output_level = determine_output_level(conf.quiet, conf.silent);
+        conf.output_level = determine_output_level(conf.quiet, conf.silent, conf.json);
         conf.requester_policy = determine_requester_policy(conf.auto_tune, conf.auto_bail);
         update_if_not_default!(&mut conf.output, new.output, "");
         update_if_not_default!(&mut conf.redirects, new.redirects, false);
         update_if_not_default!(&mut conf.insecure, new.insecure, false);
         update_if_not_default!(&mut conf.force_recursion, new.force_recursion, false);
-        update_if_not_default!(&mut conf.extract_links, new.extract_links, false);
+        update_if_not_default!(&mut conf.extract_links, new.extract_links, extract_links());
         update_if_not_default!(&mut conf.extensions, new.extensions, Vec::<String>::new());
         update_if_not_default!(&mut conf.methods, new.methods, methods());
         update_if_not_default!(&mut conf.data, new.data, Vec::<u8>::new());
         update_if_not_default!(&mut conf.url_denylist, new.url_denylist, Vec::<Url>::new());
+        update_if_not_default!(&mut conf.update_app, new.update_app, false);
         if !new.regex_denylist.is_empty() {
             // cant use the update_if_not_default macro due to the following error
             //
@@ -1038,10 +1177,14 @@ impl Configuration {
         update_if_not_default!(&mut conf.replay_proxy, new.replay_proxy, "");
         update_if_not_default!(&mut conf.debug_log, new.debug_log, "");
         update_if_not_default!(&mut conf.resume_from, new.resume_from, "");
-        update_if_not_default!(&mut conf.json, new.json, false);
 
         update_if_not_default!(&mut conf.timeout, new.timeout, timeout());
         update_if_not_default!(&mut conf.user_agent, new.user_agent, user_agent());
+        update_if_not_default!(
+            &mut conf.backup_extensions,
+            new.backup_extensions,
+            backup_extensions()
+        );
         update_if_not_default!(&mut conf.random_agent, new.random_agent, false);
         update_if_not_default!(&mut conf.threads, new.threads, threads());
         update_if_not_default!(&mut conf.depth, new.depth, depth());

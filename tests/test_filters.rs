@@ -247,3 +247,95 @@ fn filters_similar_should_filter_response() {
     assert_eq!(not_similar.hits(), 1);
     teardown_tmp_directory(tmp_dir);
 }
+
+#[test]
+/// when using --collect-backups, should only see results in output
+/// when the response shouldn't be otherwise filtered
+fn collect_backups_should_be_filtered() {
+    let srv = MockServer::start();
+    let (tmp_dir, file) = setup_tmp_directory(&["LICENSE".to_string()], "wordlist").unwrap();
+
+    let mock = srv.mock(|when: httpmock::When, then| {
+        when.method(GET).path("/LICENSE");
+        then.status(200).body("this is a test");
+    });
+
+    let mock_two = srv.mock(|when, then| {
+        when.method(GET).path("/LICENSE.bak");
+        then.status(201)
+            .body("im a backup file, but filtered out because im not 200");
+    });
+
+    let cmd = Command::cargo_bin("feroxbuster")
+        .unwrap()
+        .arg("--url")
+        .arg(srv.url("/"))
+        .arg("--wordlist")
+        .arg(file.as_os_str())
+        .arg("--status-codes")
+        .arg("200")
+        .arg("--collect-backups")
+        .unwrap();
+
+    cmd.assert().success().stdout(
+        predicate::str::contains("/LICENSE")
+            .and(predicate::str::contains("200"))
+            .and(predicate::str::contains("/LICENSE.bak"))
+            .not()
+            .and(predicate::str::contains("201"))
+            .not(),
+    );
+
+    assert_eq!(mock.hits(), 1);
+    assert_eq!(mock_two.hits(), 1);
+    teardown_tmp_directory(tmp_dir);
+}
+
+#[test]
+/// create a FeroxResponse that should elicit a true from
+/// RegexFilter::should_filter_response
+fn filters_regex_should_filter_response_based_on_headers() {
+    let srv = MockServer::start();
+    let (tmp_dir, file) = setup_tmp_directory(
+        &["not-matching".to_string(), "matching".to_string()],
+        "wordlist",
+    )
+    .unwrap();
+
+    let mock = srv.mock(|when, then| {
+        when.method(GET).path("/not-matching");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("this is a test");
+    });
+
+    let mock_two = srv.mock(|when, then| {
+        when.method(GET).path("/matching");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body("this is also a test");
+    });
+
+    let cmd = Command::cargo_bin("feroxbuster")
+        .unwrap()
+        .arg("--url")
+        .arg(srv.url("/"))
+        .arg("--wordlist")
+        .arg(file.as_os_str())
+        .arg("--filter-regex")
+        .arg("content-type:application/json")
+        .unwrap();
+
+    cmd.assert().success().stdout(
+        predicate::str::contains("/not-matching")
+            .and(predicate::str::contains("200"))
+            .and(predicate::str::contains("/matching"))
+            .not()
+            .and(predicate::str::contains("200"))
+            .not(),
+    );
+
+    assert_eq!(mock.hits(), 1);
+    assert_eq!(mock_two.hits(), 1);
+    teardown_tmp_directory(tmp_dir);
+}

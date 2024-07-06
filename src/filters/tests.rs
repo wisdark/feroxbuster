@@ -1,26 +1,38 @@
 use super::*;
-use ::fuzzyhash::FuzzyHash;
+use crate::nlp::preprocess;
+use crate::DEFAULT_METHOD;
 use ::regex::Regex;
 
 #[test]
-/// simply test the default values for wildcardfilter, expect 0, 0
+/// simply test the default values for wildcardfilter
 fn wildcard_filter_default() {
     let wcf = WildcardFilter::default();
-    assert_eq!(wcf.size, u64::MAX);
-    assert_eq!(wcf.dynamic, u64::MAX);
+    assert_eq!(wcf.content_length, None);
+    assert_eq!(wcf.line_count, None);
+    assert_eq!(wcf.word_count, None);
+    assert_eq!(wcf.method, DEFAULT_METHOD.to_string());
+    assert_eq!(wcf.status_code, 0);
+    assert!(!wcf.dont_filter);
 }
 
 #[test]
 /// just a simple test to increase code coverage by hitting as_any and the inner value
 fn wildcard_filter_as_any() {
-    let filter = WildcardFilter::default();
+    let mut filter = WildcardFilter::default();
     let filter2 = WildcardFilter::default();
 
     assert!(filter.box_eq(filter2.as_any()));
 
     assert_eq!(
         *filter.as_any().downcast_ref::<WildcardFilter>().unwrap(),
-        filter
+        filter2
+    );
+
+    filter.content_length = Some(1);
+
+    assert_ne!(
+        *filter.as_any().downcast_ref::<WildcardFilter>().unwrap(),
+        filter2
     );
 }
 
@@ -111,18 +123,21 @@ fn regex_filter_as_any() {
 #[test]
 /// test should_filter on WilcardFilter where static logic matches
 fn wildcard_should_filter_when_static_wildcard_found() {
+    let body =
+        "pellentesque diam volutpat commodo sed egestas egestas fringilla phasellus faucibus";
+
     let mut resp = FeroxResponse::default();
     resp.set_wildcard(true);
     resp.set_url("http://localhost");
-    resp.set_text(
-        "pellentesque diam volutpat commodo sed egestas egestas fringilla phasellus faucibus",
-    );
+    resp.set_text(body);
 
     let filter = WildcardFilter {
-        size: 83,
-        dynamic: 0,
+        content_length: Some(body.len() as u64),
+        line_count: Some(1),
+        word_count: Some(10),
+        method: DEFAULT_METHOD.to_string(),
+        status_code: 200,
         dont_filter: false,
-        method: "GET".to_owned(),
     };
 
     assert!(filter.should_filter_response(&resp));
@@ -136,7 +151,14 @@ fn wildcard_should_filter_when_static_wildcard_len_is_zero() {
     resp.set_url("http://localhost");
 
     // default WildcardFilter is used in the code that executes when response.content_length() == 0
-    let filter = WildcardFilter::new(false);
+    let filter = WildcardFilter {
+        content_length: Some(0),
+        line_count: Some(0),
+        word_count: Some(0),
+        method: DEFAULT_METHOD.to_string(),
+        status_code: 200,
+        dont_filter: false,
+    };
 
     assert!(filter.should_filter_response(&resp));
 }
@@ -150,17 +172,16 @@ fn wildcard_should_filter_when_dynamic_wildcard_found() {
     resp.set_text("pellentesque diam volutpat commodo sed egestas egestas fringilla");
 
     let filter = WildcardFilter {
-        size: 0,
-        dynamic: 59, // content-length - 5 (len('stuff'))
+        content_length: None,
+        line_count: None,
+        word_count: Some(8),
+        method: DEFAULT_METHOD.to_string(),
+        status_code: 200,
         dont_filter: false,
-        method: "GET".to_owned(),
     };
-
-    println!("resp: {resp:?}: filter: {filter:?}");
 
     assert!(filter.should_filter_response(&resp));
 }
-
 #[test]
 /// test should_filter on RegexFilter where regex matches body
 fn regexfilter_should_filter_when_regex_matches_on_response_body() {
@@ -186,8 +207,7 @@ fn similarity_filter_is_accurate() {
     resp.set_text("sitting");
 
     let mut filter = SimilarityFilter {
-        hash: FuzzyHash::new("kitten").to_string(),
-        threshold: 95,
+        hash: SIM_HASHER.create_signature(["kitten"].iter()),
         original_url: "".to_string(),
     };
 
@@ -195,15 +215,15 @@ fn similarity_filter_is_accurate() {
     assert!(!filter.should_filter_response(&resp));
 
     resp.set_text("");
-    filter.hash = String::new();
-    filter.threshold = 100;
+    filter.hash = SIM_HASHER.create_signature([""].iter());
 
-    // two empty strings are the same, however ssdeep doesn't accept empty strings, expect false
+    // two empty strings are the same
     assert!(!filter.should_filter_response(&resp));
 
-    resp.set_text("some data to hash for the purposes of running a test");
-    filter.hash = FuzzyHash::new("some data to hash for the purposes of running a te").to_string();
-    filter.threshold = 17;
+    resp.set_text("some data hash purposes running test");
+    filter.hash = SIM_HASHER.create_signature(
+        preprocess("some data to hash for the purposes of running a test").iter(),
+    );
 
     assert!(filter.should_filter_response(&resp));
 }
@@ -212,20 +232,17 @@ fn similarity_filter_is_accurate() {
 /// just a simple test to increase code coverage by hitting as_any and the inner value
 fn similarity_filter_as_any() {
     let filter = SimilarityFilter {
-        hash: String::from("stuff"),
-        threshold: 95,
+        hash: 1,
         original_url: "".to_string(),
     };
 
     let filter2 = SimilarityFilter {
-        hash: String::from("stuff"),
-        threshold: 95,
+        hash: 1,
         original_url: "".to_string(),
     };
 
     assert!(filter.box_eq(filter2.as_any()));
 
-    assert_eq!(filter.hash, "stuff");
     assert_eq!(
         *filter.as_any().downcast_ref::<SimilarityFilter>().unwrap(),
         filter
@@ -254,7 +271,7 @@ fn remove_function_works_as_expected() {
 
     assert_eq!(data.filters.read().unwrap().len(), 5);
 
-    let expected = vec![
+    let expected = [
         WordsFilter { word_count: 1 },
         WordsFilter { word_count: 3 },
         WordsFilter { word_count: 5 },

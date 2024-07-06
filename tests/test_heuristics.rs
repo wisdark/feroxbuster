@@ -104,9 +104,9 @@ fn test_single_target_cannot_connect_due_to_ssl_errors() -> Result<(), Box<dyn s
         .arg(file.as_os_str())
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("Could not connect to https://expired.badssl.com due to SSL errors (run with -k to ignore), skipping...", )
-        );
+        .stdout(predicate::str::contains(
+            "Could not connect to https://expired.badssl.com",
+        ));
 
     teardown_tmp_directory(tmp_dir);
     Ok(())
@@ -164,7 +164,7 @@ fn test_static_wildcard_request_found() -> Result<(), Box<dyn std::error::Error>
 
     let mock = srv.mock(|when, then| {
         when.method(GET)
-            .path_matches(Regex::new("/[a-zA-Z0-9]{32}/").unwrap());
+            .path_matches(Regex::new("/[.a-zA-Z0-9]{32,}/").unwrap());
         then.status(200).body("this is a test");
     });
 
@@ -180,66 +180,17 @@ fn test_static_wildcard_request_found() -> Result<(), Box<dyn std::error::Error>
     teardown_tmp_directory(tmp_dir);
 
     cmd.assert().success().stdout(
-        predicate::str::contains("WLD")
-            .and(predicate::str::contains("Got"))
+        predicate::str::contains("GET")
+            .and(predicate::str::contains(
+                "Auto-filtering found 404-like response and created new filter",
+            ))
             .and(predicate::str::contains("200"))
-            .and(predicate::str::contains("(url length: 32)")),
+            .and(predicate::str::contains("1l")),
     );
 
-    assert_eq!(mock.hits(), 1);
+    assert_eq!(mock.hits(), 6);
+
     Ok(())
-}
-
-#[test]
-/// test finds a dynamic wildcard and reports as much to stdout and a file
-fn test_dynamic_wildcard_request_found() {
-    let srv = MockServer::start();
-    let (tmp_dir, file) = setup_tmp_directory(&["LICENSE".to_string()], "wordlist").unwrap();
-    let outfile = tmp_dir.path().join("outfile");
-
-    let mock = srv.mock(|when, then| {
-        when.method(GET)
-            .path_matches(Regex::new("/[a-zA-Z0-9]{32}/").unwrap());
-        then.status(200)
-            .body("this is a testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    });
-
-    let mock2 = srv.mock(|when, then| {
-        when.method(GET).path_matches(Regex::new("/[a-zA-Z0-9]{96}/").unwrap());
-        then.status(200).body("this is a testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    });
-
-    let cmd = Command::cargo_bin("feroxbuster")
-        .unwrap()
-        .arg("--url")
-        .arg(srv.url("/"))
-        .arg("--wordlist")
-        .arg(file.as_os_str())
-        .arg("--add-slash")
-        .arg("--output")
-        .arg(outfile.as_os_str())
-        .unwrap();
-
-    let contents = std::fs::read_to_string(outfile).unwrap();
-
-    teardown_tmp_directory(tmp_dir);
-
-    assert!(contents.contains("WLD"));
-    assert!(contents.contains("Got"));
-    assert!(contents.contains("200"));
-    assert!(contents.contains("(url length: 32)"));
-    assert!(contents.contains("(url length: 96)"));
-
-    cmd.assert().success().stdout(
-        predicate::str::contains("WLD")
-            .and(predicate::str::contains("Got"))
-            .and(predicate::str::contains("200"))
-            .and(predicate::str::contains("(url length: 32)"))
-            .and(predicate::str::contains("(url length: 96)")),
-    );
-
-    assert_eq!(mock.hits(), 1);
-    assert_eq!(mock2.hits(), 1);
 }
 
 #[test]
@@ -326,14 +277,14 @@ fn heuristics_wildcard_test_with_two_static_wildcards_with_silent_enabled(
 
     let mock = srv.mock(|when, then| {
         when.method(GET)
-            .path_matches(Regex::new("/[a-zA-Z0-9]{32}/").unwrap());
+            .path_matches(Regex::new("/.?[a-zA-Z0-9]{32,}").unwrap());
         then.status(200)
             .body("this is a testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     });
 
     let mock2 = srv.mock(|when, then| {
         when.method(GET)
-            .path_matches(Regex::new("/[a-zA-Z0-9]{96}/").unwrap());
+            .path_matches(Regex::new("/LICENSE").unwrap());
         then.status(200)
             .body("this is a testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     });
@@ -344,7 +295,6 @@ fn heuristics_wildcard_test_with_two_static_wildcards_with_silent_enabled(
         .arg(srv.url("/"))
         .arg("--wordlist")
         .arg(file.as_os_str())
-        .arg("--add-slash")
         .arg("--silent")
         .arg("--threads")
         .arg("1")
@@ -352,10 +302,68 @@ fn heuristics_wildcard_test_with_two_static_wildcards_with_silent_enabled(
 
     teardown_tmp_directory(tmp_dir);
 
-    cmd.assert().success().stdout(predicate::str::is_empty());
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(srv.url("/")));
 
-    assert_eq!(mock.hits(), 1);
+    assert_eq!(mock.hits(), 6);
     assert_eq!(mock2.hits(), 1);
+    Ok(())
+}
+
+#[test]
+/// test finds a 404-like response that returns a 403 and a 403 directory should still be allowed
+/// to be tested for recrusion
+fn heuristics_wildcard_test_that_auto_filtering_403s_still_allows_for_recursion_into_403_directories(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let srv = MockServer::start();
+
+    let super_long = String::from("92969beae6bf4beb855d1622406d87e395c87387a9ad432e8a11245002b709b03cf609d471004154b83bcc1c6ec49f6f09d471004154b83bcc1c6ec49f6f");
+
+    let (tmp_dir, file) =
+        setup_tmp_directory(&["LICENSE".to_string(), super_long.clone()], "wordlist")?;
+
+    srv.mock(|when, then| {
+        when.method(GET)
+            .path_matches(Regex::new("/.?[a-zA-Z0-9]{32,103}").unwrap());
+        then.status(403)
+            .body("this is a testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    });
+
+    srv.mock(|when, then| {
+        when.method(GET).path("/LICENSE/");
+        then.status(403)
+            .body("this is a testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    });
+
+    srv.mock(|when, then| {
+        when.method(GET).path(format!("/LICENSE/{}", super_long));
+        then.status(200);
+    });
+
+    let cmd = Command::cargo_bin("feroxbuster")
+        .unwrap()
+        .arg("--url")
+        .arg(srv.url("/"))
+        .arg("--wordlist")
+        .arg(file.as_os_str())
+        .arg("--add-slash")
+        .unwrap();
+
+    teardown_tmp_directory(tmp_dir);
+
+    cmd.assert().success().stdout(
+        predicate::str::contains("GET")
+            .and(predicate::str::contains(
+                "Auto-filtering found 404-like response and created new filter",
+            ))
+            .and(predicate::str::contains("403"))
+            .and(predicate::str::contains("1l"))
+            .and(predicate::str::contains("4w"))
+            .and(predicate::str::contains("46c"))
+            .and(predicate::str::contains(srv.url("/LICENSE/LICENSE/"))),
+    );
+
     Ok(())
 }
 

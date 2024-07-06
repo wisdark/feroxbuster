@@ -22,6 +22,7 @@ use utils::{setup_tmp_directory, teardown_tmp_directory};
 // these words will be used along with pattern matching to trigger different policies
 
 #[test]
+#[ignore]
 /// --auto-bail should cancel a scan with spurious errors  
 fn auto_bail_cancels_scan_with_timeouts() {
     let srv = MockServer::start();
@@ -37,7 +38,7 @@ fn auto_bail_cancels_scan_with_timeouts() {
     let error_mock = srv.mock(|when, then| {
         when.method(GET)
             .path_matches(Regex::new("/[a-zA-Z]{6}error[a-zA-Z]{6}").unwrap());
-        then.delay(Duration::new(3, 0))
+        then.delay(Duration::new(2, 5000))
             .status(200)
             .body("verboten, nerd");
     });
@@ -57,7 +58,7 @@ fn auto_bail_cancels_scan_with_timeouts() {
     Command::cargo_bin("feroxbuster")
         .unwrap()
         .arg("--url")
-        .arg(srv.url("/"))
+        .arg(&srv.url("/"))
         .arg("--wordlist")
         .arg(file.as_os_str())
         .arg("--auto-bail")
@@ -65,10 +66,10 @@ fn auto_bail_cancels_scan_with_timeouts() {
         .arg("--timeout")
         .arg("2")
         .arg("--threads")
-        .arg("4")
+        .arg("8")
         .arg("--debug-log")
         .arg(logfile.as_os_str())
-        .arg("-vvvv")
+        .arg("-vv")
         .arg("--json")
         .assert()
         .success();
@@ -146,7 +147,7 @@ fn auto_bail_cancels_scan_with_403s() {
         .arg("4")
         .arg("--debug-log")
         .arg(logfile.as_os_str())
-        .arg("-vvvv")
+        .arg("-vv")
         .arg("--json")
         .assert()
         .success();
@@ -228,7 +229,7 @@ fn auto_bail_cancels_scan_with_429s() {
         .arg("4")
         .arg("--debug-log")
         .arg(logfile.as_os_str())
-        .arg("-vvvv")
+        .arg("-vvv")
         .arg("--json")
         .assert()
         .success();

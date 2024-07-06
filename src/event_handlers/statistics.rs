@@ -115,14 +115,21 @@ impl StatsHandler {
                     }
                 }
                 Command::AddToF64Field(field, value) => self.stats.update_f64_field(field, value),
-                Command::CreateBar => {
+                Command::CreateBar(offset) => {
                     self.bar = add_bar("", self.stats.total_expected() as u64, BarType::Total);
+                    self.bar.set_position(offset);
                 }
                 Command::LoadStats(filename) => {
                     self.stats.merge_from(&filename)?;
                 }
                 Command::Sync(sender) => {
                     sender.send(true).unwrap_or_default();
+                }
+                Command::QueryOverallBarEta(sender) => {
+                    sender.send(self.bar.eta()).unwrap_or_default();
+                }
+                Command::UpdateTargets(targets) => {
+                    self.stats.update_targets(targets);
                 }
                 Command::Exit => break,
                 _ => {} // no more commands needed
@@ -131,7 +138,7 @@ impl StatsHandler {
 
         self.bar.finish();
 
-        log::debug!("{:#?}", *self.stats);
+        log::info!("{:#?}", *self.stats);
         log::trace!("exit: start");
         Ok(())
     }
@@ -146,8 +153,13 @@ impl StatsHandler {
             self.stats.errors(),
         );
 
-        self.bar.set_message(&msg);
-        self.bar.inc(1);
+        self.bar.set_message(msg);
+
+        if self.bar.position() < self.stats.total_expected() as u64 {
+            // don't run off the end when we're a few requests over the expected total
+            // due to the heuristics tests
+            self.bar.inc(1);
+        }
     }
 
     /// Initialize new `Stats` object and the sc side of an mpsc channel that is responsible for

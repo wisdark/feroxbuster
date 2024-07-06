@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, Semaphore};
 use crate::{
     response::FeroxResponse,
     scan_manager::{FeroxScan, FeroxScans, ScanOrder},
-    scanner::FeroxScanner,
+    scanner::{FeroxScanner, RESPONSES},
     statistics::StatField::TotalScans,
     url::FeroxUrl,
     utils::should_deny_url,
@@ -16,7 +16,7 @@ use crate::{
 use super::command::Command::AddToUsizeField;
 use super::*;
 use crate::statistics::StatField;
-use reqwest::Url;
+use crate::utils::parse_url_with_raw_path;
 use tokio::time::Duration;
 
 #[derive(Debug)]
@@ -218,11 +218,11 @@ impl ScanHandler {
         // current number of requests expected per scan
         // ExpectedPerScan and TotalExpected are a += action, so we need the wordlist length to
         // update them while the other updates use expected_num_requests_per_dir
-        let num_words = self.get_wordlist()?.len();
+        let num_words = self.get_wordlist(0)?.len();
         let current_expectation = self.handles.expected_num_requests_per_dir() as u64;
 
         // used in the calculation of bar width down below, see explanation there
-        let divisor = self.handles.expected_num_requests_multiplier() as u64 - 1;
+        let divisor = (self.handles.expected_num_requests_multiplier() as u64 - 1).max(1);
 
         // add another `wordlist.len` to the expected per scan tracker in the statistics handler
         self.handles
@@ -266,7 +266,7 @@ impl ScanHandler {
                         let bar = scan.progress_bar();
 
                         // (4000 - 3000) / 2 => 500 words left to send
-                        let length = bar.length();
+                        let length = bar.length().unwrap_or(1);
                         let num_words_left = (length - bar.position()) / divisor;
 
                         // accumulate each bar's increment value for incrementing the total bar
@@ -290,10 +290,14 @@ impl ScanHandler {
     }
 
     /// Helper to easily get the (locked) underlying wordlist
-    pub fn get_wordlist(&self) -> Result<Arc<Vec<String>>> {
+    pub fn get_wordlist(&self, offset: usize) -> Result<Arc<Vec<String>>> {
         if let Ok(guard) = self.wordlist.lock().as_ref() {
             if let Some(list) = guard.as_ref() {
-                return Ok(list.clone());
+                return if offset > 0 {
+                    Ok(Arc::new(list[offset..].to_vec()))
+                } else {
+                    Ok(list.clone())
+                };
             }
         }
 
@@ -321,14 +325,27 @@ impl ScanHandler {
                 self.data.add_directory_scan(&target, order).1 // add the new target; return FeroxScan
             };
 
-            if should_test_deny && should_deny_url(&Url::parse(&target)?, self.handles.clone())? {
+            if should_test_deny
+                && should_deny_url(&parse_url_with_raw_path(&target)?, self.handles.clone())?
+            {
                 // response was caught by a user-provided deny list
                 // checking this last, since it's most susceptible to longer runtimes due to what
                 // input is received
                 continue;
             }
 
-            let list = self.get_wordlist()?;
+            let divisor = self.handles.expected_num_requests_multiplier();
+
+            let list = if divisor > 1 && scan.requests() > 0 {
+                // if there were extensions provided and/or more than a single method used, and some
+                // number of requests have already been sent, we need to adjust the offset into the
+                // wordlist to ensure we don't index out of bounds
+
+                let adjusted = scan.requests_made_so_far() as f64 / (divisor as f64 - 1.0).max(1.0);
+                self.get_wordlist(adjusted as usize)?
+            } else {
+                self.get_wordlist(scan.requests_made_so_far() as usize)?
+            };
 
             log::info!("scan handler received {} - beginning scan", target);
 
@@ -384,6 +401,58 @@ impl ScanHandler {
         if response.reached_max_depth(base_depth, self.max_depth, self.handles.clone()) {
             // at or past recursion depth
             return Ok(());
+        }
+
+        if let Ok(responses) = RESPONSES.responses.read() {
+            for maybe_wild in responses.iter() {
+                if !maybe_wild.wildcard() || !maybe_wild.is_directory() {
+                    // if the stored response isn't a wildcard, skip it
+                    // if the stored response isn't a directory, skip it
+                    // we're only interested in preventing recursion into wildcard directories
+                    continue;
+                }
+
+                if maybe_wild.method() != response.method() {
+                    // methods don't match, skip it
+                    continue;
+                }
+
+                // methods match and is a directory wildcard
+                // need to check the wildcard's parent directory
+                // for equality with the incoming response's parent directory
+                //
+                // if the parent directories match, we need to prevent recursion
+                // into the wildcard directory
+
+                match (
+                    maybe_wild.url().path_segments(),
+                    response.url().path_segments(),
+                ) {
+                    // both urls must have path segments
+                    (Some(mut maybe_wild_segments), Some(mut response_segments)) => {
+                        match (
+                            maybe_wild_segments.nth_back(1),
+                            response_segments.nth_back(1),
+                        ) {
+                            // both urls must have at least 2 path segments, the next to last being the parent
+                            (Some(maybe_wild_parent), Some(response_parent)) => {
+                                if maybe_wild_parent == response_parent {
+                                    // the parent directories match, so we need to prevent recursion
+                                    return Ok(());
+                                }
+                            }
+                            _ => {
+                                // we couldn't get the parent directory, so we'll skip this
+                                continue;
+                            }
+                        }
+                    }
+                    _ => {
+                        // we couldn't get the path segments, so we'll skip this
+                        continue;
+                    }
+                }
+            }
         }
 
         let targets = vec![response.url().to_string()];

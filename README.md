@@ -97,10 +97,21 @@ sudo apt update && sudo apt install -y feroxbuster
 
 #### Linux (32 and 64-bit) & MacOS
 
+Install to a particular directory
 ```
-curl -sL https://raw.githubusercontent.com/epi052/feroxbuster/master/install-nix.sh | bash
+curl -sL https://raw.githubusercontent.com/epi052/feroxbuster/main/install-nix.sh | bash -s $HOME/.local/bin
 ```
 
+Install to current working directory
+```
+curl -sL https://raw.githubusercontent.com/epi052/feroxbuster/main/install-nix.sh | bash
+```
+
+#### MacOS via Homebrew 
+
+```
+brew install feroxbuster
+```
 
 #### Windows x86_64
 
@@ -110,9 +121,27 @@ Expand-Archive .\feroxbuster.zip
 .\feroxbuster\feroxbuster.exe -V
 ```
 
+#### Windows via Winget
+
+```
+winget install epi052.feroxbuster
+```
+
+#### Windows via Chocolatey
+
+```
+choco install feroxbuster
+```
+
 #### All others 
 
 Please refer the the [documentation](https://epi052.github.io/feroxbuster-docs/docs/).
+
+### Updating feroxbuster (new in v2.9.1)
+
+```
+./feroxbuster --update
+```
 
 ## 🧰 Example Usage
 
@@ -167,6 +196,8 @@ cat targets | ./feroxbuster --stdin --silent -s 200 301 302 --redirects -x js | 
 ./feroxbuster -u http://127.1 --query token=0123456789ABCDEF
 ```
 
+
+
 ## 🚀 Documentation has **moved** 🚀  
 
 For realsies, there used to be over 1300 lines in this README, but it's all been moved to the [new documentation site](https://epi052.github.io/feroxbuster-docs/docs/). Go check it out! 
@@ -207,7 +238,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/sbrun"><img src="https://avatars.githubusercontent.com/u/7712154?v=4?s=100" width="100px;" alt="Sophie Brun"/><br /><sub><b>Sophie Brun</b></sub></a><br /><a href="#infra-sbrun" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/black-A"><img src="https://avatars.githubusercontent.com/u/30686803?v=4?s=100" width="100px;" alt="black-A"/><br /><sub><b>black-A</b></sub></a><br /><a href="#ideas-black-A" title="Ideas, Planning, & Feedback">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/dinosn"><img src="https://avatars.githubusercontent.com/u/3851678?v=4?s=100" width="100px;" alt="Nicolas Krassas"/><br /><sub><b>Nicolas Krassas</b></sub></a><br /><a href="#ideas-dinosn" title="Ideas, Planning, & Feedback">🤔</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/N0ur5"><img src="https://avatars.githubusercontent.com/u/24260009?v=4?s=100" width="100px;" alt="N0ur5"/><br /><sub><b>N0ur5</b></sub></a><br /><a href="#ideas-N0ur5" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/N0ur5"><img src="https://avatars.githubusercontent.com/u/24260009?v=4?s=100" width="100px;" alt="N0ur5"/><br /><sub><b>N0ur5</b></sub></a><br /><a href="#ideas-N0ur5" title="Ideas, Planning, & Feedback">🤔</a> <a href="https://github.com/epi052/feroxbuster/issues?q=author%3AN0ur5" title="Bug reports">🐛</a></td>
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/moscowchill"><img src="https://avatars.githubusercontent.com/u/72578879?v=4?s=100" width="100px;" alt="mchill"/><br /><sub><b>mchill</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Amoscowchill" title="Bug reports">🐛</a></td>
@@ -222,7 +253,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/hunter0x8"><img src="https://avatars.githubusercontent.com/u/46222314?v=4?s=100" width="100px;" alt="Muhammad Ahsan"/><br /><sub><b>Muhammad Ahsan</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Ahunter0x8" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/cortantief"><img src="https://avatars.githubusercontent.com/u/34527333?v=4?s=100" width="100px;" alt="cortantief"/><br /><sub><b>cortantief</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Acortantief" title="Bug reports">🐛</a> <a href="https://github.com/epi052/feroxbuster/commits?author=cortantief" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/dsaxton"><img src="https://avatars.githubusercontent.com/u/2658661?v=4?s=100" width="100px;" alt="Daniel Saxton"/><br /><sub><b>Daniel Saxton</b></sub></a><br /><a href="#ideas-dsaxton" title="Ideas, Planning, & Feedback">🤔</a> <a href="https://github.com/epi052/feroxbuster/commits?author=dsaxton" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/n0kovo"><img src="https://avatars.githubusercontent.com/u/16690056?v=4?s=100" width="100px;" alt="n0kovo"/><br /><sub><b>n0kovo</b></sub></a><br /><a href="#ideas-n0kovo" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/n0kovo"><img src="https://avatars.githubusercontent.com/u/16690056?v=4?s=100" width="100px;" alt="n0kovo"/><br /><sub><b>n0kovo</b></sub></a><br /><a href="#ideas-n0kovo" title="Ideas, Planning, & Feedback">🤔</a> <a href="https://github.com/epi052/feroxbuster/issues?q=author%3An0kovo" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://ring0.lol"><img src="https://avatars.githubusercontent.com/u/1893909?v=4?s=100" width="100px;" alt="Justin Steven"/><br /><sub><b>Justin Steven</b></sub></a><br /><a href="#ideas-justinsteven" title="Ideas, Planning, & Feedback">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/7047payloads"><img src="https://avatars.githubusercontent.com/u/95562424?v=4?s=100" width="100px;" alt="7047payloads"/><br /><sub><b>7047payloads</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/commits?author=7047payloads" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/unkn0wnsyst3m"><img src="https://avatars.githubusercontent.com/u/21272239?v=4?s=100" width="100px;" alt="unkn0wnsyst3m"/><br /><sub><b>unkn0wnsyst3m</b></sub></a><br /><a href="#ideas-unkn0wnsyst3m" title="Ideas, Planning, & Feedback">🤔</a></td>
@@ -252,6 +283,52 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://blog.ah34.net/"><img src="https://avatars.githubusercontent.com/u/58670593?v=4?s=100" width="100px;" alt="Aidan Hall"/><br /><sub><b>Aidan Hall</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/commits?author=aidanhall34" title="Code">💻</a> <a href="#infra-aidanhall34" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://hachyderm.io/@JohnnyCiocca"><img src="https://avatars.githubusercontent.com/u/6473725?v=4?s=100" width="100px;" alt="João Ciocca"/><br /><sub><b>João Ciocca</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Ajoaociocca" title="Bug reports">🐛</a> <a href="#ideas-joaociocca" title="Ideas, Planning, & Feedback">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/f3rn0s"><img src="https://avatars.githubusercontent.com/u/1351279?v=4?s=100" width="100px;" alt="f3rn0s"/><br /><sub><b>f3rn0s</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Af3rn0s" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://sth.sh"><img src="https://avatars.githubusercontent.com/u/2099767?v=4?s=100" width="100px;" alt="LongCat"/><br /><sub><b>LongCat</b></sub></a><br /><a href="#ideas-pich4ya" title="Ideas, Planning, & Feedback">🤔</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/xaeroborg"><img src="https://avatars.githubusercontent.com/u/33274680?v=4?s=100" width="100px;" alt="xaeroborg"/><br /><sub><b>xaeroborg</b></sub></a><br /><a href="#ideas-xaeroborg" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Luoooio"><img src="https://avatars.githubusercontent.com/u/26653157?v=4?s=100" width="100px;" alt="Luoooio"/><br /><sub><b>Luoooio</b></sub></a><br /><a href="#ideas-Luoooio" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://petruknisme.com"><img src="https://avatars.githubusercontent.com/u/6284204?v=4?s=100" width="100px;" alt="Aan"/><br /><sub><b>Aan</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/commits?author=aancw" title="Code">💻</a> <a href="#infra-aancw" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="#ideas-aancw" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/imBigo"><img src="https://avatars.githubusercontent.com/u/54672433?v=4?s=100" width="100px;" alt="Simon"/><br /><sub><b>Simon</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3AimBigo" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://acut3.github.io/"><img src="https://avatars.githubusercontent.com/u/17295243?v=4?s=100" width="100px;" alt="Nicolas Christin"/><br /><sub><b>Nicolas Christin</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Aacut3" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/DrorDvash"><img src="https://avatars.githubusercontent.com/u/8413651?v=4?s=100" width="100px;" alt="DrDv"/><br /><sub><b>DrDv</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3ADrorDvash" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aroly"><img src="https://avatars.githubusercontent.com/u/1257705?v=4?s=100" width="100px;" alt="Antoine Roly"/><br /><sub><b>Antoine Roly</b></sub></a><br /><a href="#ideas-aroly" title="Ideas, Planning, & Feedback">🤔</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="http://lavafroth.is-a.dev"><img src="https://avatars.githubusercontent.com/u/107522312?v=4?s=100" width="100px;" alt="Himadri Bhattacharjee"/><br /><sub><b>Himadri Bhattacharjee</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/commits?author=lavafroth" title="Code">💻</a> <a href="#ideas-lavafroth" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/AkechiShiro"><img src="https://avatars.githubusercontent.com/u/14914796?v=4?s=100" width="100px;" alt="Samy Lahfa"/><br /><sub><b>Samy Lahfa</b></sub></a><br /><a href="#ideas-AkechiShiro" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sectroyer"><img src="https://avatars.githubusercontent.com/u/6706818?v=4?s=100" width="100px;" alt="sectroyer"/><br /><sub><b>sectroyer</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Asectroyer" title="Bug reports">🐛</a> <a href="#ideas-sectroyer" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://medium.com/@b3rm1nG"><img src="https://avatars.githubusercontent.com/u/19836003?v=4?s=100" width="100px;" alt="ktecv2000"/><br /><sub><b>ktecv2000</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Aktecv2000" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://untrue.me"><img src="https://avatars.githubusercontent.com/u/56048157?v=4?s=100" width="100px;" alt="Andrea De Murtas"/><br /><sub><b>Andrea De Murtas</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/commits?author=andreademurtas" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sawmj"><img src="https://avatars.githubusercontent.com/u/30024085?v=4?s=100" width="100px;" alt="sawmj"/><br /><sub><b>sawmj</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Asawmj" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/devx00"><img src="https://avatars.githubusercontent.com/u/6897405?v=4?s=100" width="100px;" alt="Zach Hanson"/><br /><sub><b>Zach Hanson</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Adevx00" title="Bug reports">🐛</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ocervell"><img src="https://avatars.githubusercontent.com/u/9629314?v=4?s=100" width="100px;" alt="Olivier Cervello"/><br /><sub><b>Olivier Cervello</b></sub></a><br /><a href="#ideas-ocervell" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/RavySena"><img src="https://avatars.githubusercontent.com/u/67729597?v=4?s=100" width="100px;" alt="RavySena"/><br /><sub><b>RavySena</b></sub></a><br /><a href="#ideas-RavySena" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/stuhlmann"><img src="https://avatars.githubusercontent.com/u/11061864?v=4?s=100" width="100px;" alt="Florian Stuhlmann"/><br /><sub><b>Florian Stuhlmann</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Astuhlmann" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Mister7F"><img src="https://avatars.githubusercontent.com/u/35213773?v=4?s=100" width="100px;" alt="Mister7F"/><br /><sub><b>Mister7F</b></sub></a><br /><a href="#ideas-Mister7F" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/manugramm"><img src="https://avatars.githubusercontent.com/u/145961515?v=4?s=100" width="100px;" alt="manugramm"/><br /><sub><b>manugramm</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Amanugramm" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ArthurMuraro"><img src="https://avatars.githubusercontent.com/u/73059809?v=4?s=100" width="100px;" alt="ArthurMuraro"/><br /><sub><b>ArthurMuraro</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3AArthurMuraro" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/amiremami"><img src="https://avatars.githubusercontent.com/u/15929497?v=4?s=100" width="100px;" alt="Shadow"/><br /><sub><b>Shadow</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Aamiremami" title="Bug reports">🐛</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dirhamgithub"><img src="https://avatars.githubusercontent.com/u/115349974?v=4?s=100" width="100px;" alt="dirhamgithub"/><br /><sub><b>dirhamgithub</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Adirhamgithub" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/FieldOfRice"><img src="https://avatars.githubusercontent.com/u/85353?v=4?s=100" width="100px;" alt="FieldOfRice"/><br /><sub><b>FieldOfRice</b></sub></a><br /><a href="#infra-FieldOfRice" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/NotoriousRebel"><img src="https://avatars.githubusercontent.com/u/36310667?v=4?s=100" width="100px;" alt="Matt"/><br /><sub><b>Matt</b></sub></a><br /><a href="#ideas-NotoriousRebel" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/tritoke"><img src="https://avatars.githubusercontent.com/u/34941249?v=4?s=100" width="100px;" alt="Sam Leonard"/><br /><sub><b>Sam Leonard</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/commits?author=tritoke" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/rew1nter"><img src="https://avatars.githubusercontent.com/u/64508791?v=4?s=100" width="100px;" alt="Rewinter"/><br /><sub><b>Rewinter</b></sub></a><br /><a href="#ideas-rew1nter" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/deadloot"><img src="https://avatars.githubusercontent.com/u/92878901?v=4?s=100" width="100px;" alt="deadloot"/><br /><sub><b>deadloot</b></sub></a><br /><a href="#ideas-deadloot" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Spidle"><img src="https://avatars.githubusercontent.com/u/90011249?v=4?s=100" width="100px;" alt="Spidle"/><br /><sub><b>Spidle</b></sub></a><br /><a href="#ideas-Spidle" title="Ideas, Planning, & Feedback">🤔</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/JulianGR"><img src="https://avatars.githubusercontent.com/u/53094530?v=4?s=100" width="100px;" alt="Julián Gómez"/><br /><sub><b>Julián Gómez</b></sub></a><br /><a href="#ideas-JulianGR" title="Ideas, Planning, & Feedback">🤔</a> <a href="#infra-JulianGR" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/epi052/feroxbuster/commits?author=JulianGR" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/soutzis"><img src="https://avatars.githubusercontent.com/u/25797286?v=4?s=100" width="100px;" alt="Petros"/><br /><sub><b>Petros</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3Asoutzis" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sitiom"><img src="https://avatars.githubusercontent.com/u/56180050?v=4?s=100" width="100px;" alt="Ryan"/><br /><sub><b>Ryan</b></sub></a><br /><a href="#infra-sitiom" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/epi052/feroxbuster/commits?author=sitiom" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/wikamp-collaborator"><img src="https://avatars.githubusercontent.com/u/147445097?v=4?s=100" width="100px;" alt="wikamp-collaborator"/><br /><sub><b>wikamp-collaborator</b></sub></a><br /><a href="#ideas-wikamp-collaborator" title="Ideas, Planning, & Feedback">🤔</a> <a href="#infra-wikamp-collaborator" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://lino.codes"><img src="https://avatars.githubusercontent.com/u/123986259?v=4?s=100" width="100px;" alt="Lino"/><br /><sub><b>Lino</b></sub></a><br /><a href="https://github.com/epi052/feroxbuster/issues?q=author%3AL1-0" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://danthesalmon.com"><img src="https://avatars.githubusercontent.com/u/3712226?v=4?s=100" width="100px;" alt="Dan Salmon"/><br /><sub><b>Dan Salmon</b></sub></a><br /><a href="#ideas-sa7mon" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/swordfish0x0"><img src="https://avatars.githubusercontent.com/u/21209130?v=4?s=100" width="100px;" alt="swordfish0x0"/><br /><sub><b>swordfish0x0</b></sub></a><br /><a href="#ideas-swordfish0x0" title="Ideas, Planning, & Feedback">🤔</a></td>
     </tr>
   </tbody>
 </table>

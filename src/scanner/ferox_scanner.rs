@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use tokio::sync::Semaphore;
 
 use crate::filters::{create_similarity_filter, EmptyFilter, SimilarityFilter};
+use crate::heuristics::WildcardResult;
 use crate::Command::AddFilter;
 use crate::{
     event_handlers::{
@@ -182,6 +183,7 @@ impl FeroxScanner {
                     Err(e) => {
                         log::warn!("error awaiting a response: {}", e);
                         self.handles.stats.send(AddError(Other)).unwrap_or_default();
+                        std::process::exit(1);
                     }
                 }
             });
@@ -201,6 +203,9 @@ impl FeroxScanner {
         log::info!("Starting scan against: {}", self.target_url);
 
         let mut scan_timer = Instant::now();
+        // every time we extract links we'll need to await the task to make sure
+        // it completes before the scan ends
+        let mut extraction_tasks = Vec::new();
 
         if self.handles.config.extract_links && matches!(self.order, ScanOrder::Initial) {
             // check for robots.txt (cannot be in sub-directories, so limited to Initial)
@@ -209,9 +214,9 @@ impl FeroxScanner {
                 .url(&self.target_url)
                 .handles(self.handles.clone())
                 .build()?;
-
-            let result = extractor.extract().await?;
-            extractor.request_links(result).await?;
+            if let Ok(result) = extractor.extract().await {
+                extraction_tasks.push(extractor.request_links(result).await?)
+            }
         }
 
         let scanned_urls = self.handles.ferox_scans()?;
@@ -243,58 +248,86 @@ impl FeroxScanner {
         }
 
         {
-            // heuristics test block
+            // heuristics test block:
             let test = heuristics::HeuristicTests::new(self.handles.clone());
 
-            if let Ok(num_reqs) = test.wildcard(&self.target_url).await {
-                progress_bar.inc(num_reqs);
-            }
+            if let Ok(Some(dirlist_result)) = test.directory_listing(&self.target_url).await {
+                // at this point, we have a DirListingType, and it's not the None variant
+                // which means we found directory listing based on the heuristic; now we need
+                // to process the links that are available if --extract-links was used
 
-            if let Ok(dirlist_result) = test.directory_listing(&self.target_url).await {
-                if dirlist_result.is_some() {
-                    let dirlist_result = dirlist_result.unwrap();
-                    // at this point, we have a DirListingType, and it's not the None variant
-                    // which means we found directory listing based on the heuristic; now we need
-                    // to process the links that are available if --extract-links was used
+                if self.handles.config.extract_links {
+                    let mut extractor = ExtractorBuilder::default()
+                        .response(&dirlist_result.response)
+                        .target(ExtractionTarget::DirectoryListing)
+                        .url(&self.target_url)
+                        .handles(self.handles.clone())
+                        .build()?;
 
-                    if self.handles.config.extract_links {
-                        let mut extractor = ExtractorBuilder::default()
-                            .response(&dirlist_result.response)
-                            .target(ExtractionTarget::DirectoryListing)
-                            .url(&self.target_url)
-                            .handles(self.handles.clone())
-                            .build()?;
+                    let result = extractor.extract_from_dir_listing().await?;
 
-                        let result = extractor.extract_from_dir_listing().await?;
+                    extraction_tasks.push(extractor.request_links(result).await?);
 
-                        extractor.request_links(result).await?;
+                    log::trace!("exit: scan_url -> Directory listing heuristic");
 
-                        log::trace!("exit: scan_url -> Directory listing heuristic");
+                    self.handles.stats.send(AddToF64Field(
+                        DirScanTimes,
+                        scan_timer.elapsed().as_secs_f64(),
+                    ))?;
 
-                        self.handles.stats.send(AddToF64Field(
-                            DirScanTimes,
-                            scan_timer.elapsed().as_secs_f64(),
-                        ))?;
+                    self.handles.stats.send(SubtractFromUsizeField(
+                        TotalExpected,
+                        progress_bar.length().unwrap_or(0) as usize,
+                    ))?;
+                }
 
-                        self.handles.stats.send(SubtractFromUsizeField(
-                            TotalExpected,
-                            progress_bar.length() as usize,
-                        ))?;
-                    }
+                let mut message = format!("=> {}", style("Directory listing").blue().bright());
 
-                    let mut message = format!("=> {}", style("Directory listing").blue().bright());
+                if !self.handles.config.extract_links {
+                    write!(
+                        message,
+                        " (remove {} to scan)",
+                        style("--dont-extract-links").bright().yellow()
+                    )?;
+                }
 
-                    if !self.handles.config.extract_links {
-                        write!(message, " (add {} to scan)", style("-e").bright().yellow())?;
+                if !self.handles.config.force_recursion {
+                    for handle in extraction_tasks.into_iter().flatten() {
+                        _ = handle.await;
                     }
 
                     progress_bar.reset_eta();
-                    progress_bar.finish_with_message(&message);
+                    progress_bar.finish_with_message(message);
 
                     ferox_scan.finish()?;
 
-                    return Ok(());
+                    return Ok(()); // nothing left to do if we found a dir listing
                 }
+            }
+
+            // now that we haven't found a directory listing, we'll attempt to derive whatever
+            // the server is using to respond to resources that don't exist (could be a
+            // traditional 404, or a custom response)
+            //
+            // `detect_404_like_responses` will make the requests that the wildcard test used to
+            // perform pre-2.8 in addition to new detection techniques, superseding the old
+            // wildcard test
+            let num_reqs_made = test.detect_404_like_responses(&self.target_url).await?;
+
+            match num_reqs_made {
+                Some(WildcardResult::WildcardDirectory(num_reqs)) => {
+                    let message = format!(
+                        "=> {} dir! {} recursion",
+                        style("Wildcard").blue().bright(),
+                        style("stopped").red()
+                    );
+                    progress_bar.set_message(message);
+                    progress_bar.inc(num_reqs as u64);
+                }
+                Some(WildcardResult::FourOhFourLike(num_reqs)) => {
+                    progress_bar.inc(num_reqs as u64);
+                }
+                _ => {}
             }
         }
 
@@ -315,7 +348,7 @@ impl FeroxScanner {
             let new_words = TF_IDF.read().unwrap().all_words();
             let new_words_len = new_words.len();
 
-            let cur_length = progress_bar.length();
+            let cur_length = progress_bar.length().unwrap_or(0);
             let new_length = cur_length + new_words_len as u64;
 
             progress_bar.set_length(new_length);
@@ -344,6 +377,10 @@ impl FeroxScanner {
             DirScanTimes,
             scan_timer.elapsed().as_secs_f64(),
         ))?;
+
+        for handle in extraction_tasks.into_iter().flatten() {
+            _ = handle.await;
+        }
 
         ferox_scan.finish()?;
 

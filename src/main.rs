@@ -1,11 +1,14 @@
 use std::io::stdin;
 use std::{
-    env::args,
+    env::{
+        args,
+        consts::{ARCH, OS},
+    },
     fs::{create_dir, remove_file, File},
     io::{stderr, BufRead, BufReader},
     ops::Index,
     path::Path,
-    process::Command,
+    process::{exit, Command, Stdio},
     sync::{atomic::Ordering, Arc},
 };
 
@@ -22,13 +25,14 @@ use feroxbuster::{
     config::{Configuration, OutputLevel},
     event_handlers::{
         Command::{
-            AddHandles, CreateBar, Exit, JoinTasks, LoadStats, ScanInitialUrls, UpdateWordlist,
+            AddHandles, CreateBar, Exit, JoinTasks, LoadStats, ScanInitialUrls, UpdateTargets,
+            UpdateWordlist,
         },
         FiltersHandler, Handles, ScanHandler, StatsHandler, Tasks, TermInputHandler,
         TermOutHandler, SCAN_COMPLETE,
     },
     filters, heuristics, logger,
-    progress::{PROGRESS_BAR, PROGRESS_PRINTER},
+    progress::PROGRESS_PRINTER,
     scan_manager::{self, ScanType},
     scanner,
     utils::{fmt_err, slugify_filename},
@@ -38,6 +42,7 @@ use feroxbuster::{
 use feroxbuster::{utils::set_open_file_limit, DEFAULT_OPEN_FILE_LIMIT};
 use lazy_static::lazy_static;
 use regex::Regex;
+use self_update::cargo_crate_version;
 
 lazy_static! {
     /// Limits the number of parallel scans active at any given time when using --parallel
@@ -102,8 +107,20 @@ async fn scan(targets: Vec<String>, handles: Arc<Handles>) -> Result<()> {
     //   having been set, makes it so the progress bar doesn't flash as full before anything has
     //   even happened
     if matches!(handles.config.output_level, OutputLevel::Default) {
+        let mut total_offset = 0;
+
+        if let Ok(guard) = handles.scans.read() {
+            if let Some(handle) = &*guard {
+                if let Ok(scans) = handle.data.scans.read() {
+                    for scan in scans.iter() {
+                        total_offset += scan.requests_made_so_far();
+                    }
+                }
+            }
+        }
+
         // only create the bar if no --silent|--quiet
-        handles.stats.send(CreateBar)?;
+        handles.stats.send(CreateBar(total_offset))?;
 
         // blocks until the bar is created / avoids race condition in first two bars
         handles.stats.sync().await?;
@@ -204,22 +221,75 @@ async fn wrapped_main(config: Arc<Configuration>) -> Result<()> {
         // PROGRESS_PRINTER and PROGRESS_BAR have been used at least once.  This call satisfies
         // that constraint
         PROGRESS_PRINTER.println("");
-        PROGRESS_BAR.join().unwrap();
     });
 
-    // cloning an Arc is cheap (it's basically a pointer into the heap)
-    // so that will allow for cheap/safe sharing of a single wordlist across multi-target scans
-    // as well as additional directories found as part of recursion
-    let words = match get_unique_words_from_wordlist(&config.wordlist) {
-        Ok(w) => w,
-        Err(err) => {
-            let secondary = Path::new(SECONDARY_WORDLIST);
+    // check if update_app is true
+    if config.update_app {
+        match update_app().await {
+            Err(e) => eprintln!("\n[ERROR] {}", e),
+            Ok(self_update::Status::UpToDate(version)) => {
+                eprintln!("\nFeroxbuster {} is up to date", version)
+            }
+            Ok(self_update::Status::Updated(version)) => {
+                eprintln!("\nFeroxbuster updated to {} version", version)
+            }
+        }
+        exit(0);
+    }
 
-            if secondary.exists() {
-                eprintln!("Found wordlist in secondary location");
-                get_unique_words_from_wordlist(SECONDARY_WORDLIST)?
-            } else {
-                return Err(err);
+    let words = if config.wordlist.starts_with("http") {
+        // found a url scheme, attempt to download the wordlist
+        let response = config
+            .client
+            .get(&config.wordlist)
+            .send()
+            .await
+            .context(format!(
+                "Unable to download wordlist from remote url: {}",
+                config.wordlist
+            ))?;
+
+        if !response.status().is_success() {
+            // status code isn't a 200, bail
+            bail!(
+                "[{}] Unable to download wordlist from url: {}",
+                response.status().as_str(),
+                config.wordlist
+            );
+        }
+
+        // attempt to get the filename from the url's path
+        let Some(path_segments) = response.url().path_segments() else {
+            bail!("Unable to parse path from url: {}", response.url());
+        };
+
+        let Some(filename) = path_segments.last() else {
+            bail!(
+                "Unable to parse filename from url's path: {}",
+                response.url().path()
+            );
+        };
+
+        let filename = filename.to_string();
+
+        // read the body and write it to disk, then use existing code to read the wordlist
+        let body = response.text().await?;
+
+        std::fs::write(&filename, body)?;
+
+        get_unique_words_from_wordlist(&filename)?
+    } else {
+        match get_unique_words_from_wordlist(&config.wordlist) {
+            Ok(w) => w,
+            Err(err) => {
+                let secondary = Path::new(SECONDARY_WORDLIST);
+
+                if secondary.exists() {
+                    eprintln!("Found wordlist in secondary location");
+                    get_unique_words_from_wordlist(SECONDARY_WORDLIST)?
+                } else {
+                    return Err(err);
+                }
             }
         }
     };
@@ -256,9 +326,15 @@ async fn wrapped_main(config: Arc<Configuration>) -> Result<()> {
     // create new Tasks object, each of these handles is one that will be joined on later
     let tasks = Tasks::new(out_task, stats_task, filters_task, scan_task);
 
-    if !config.time_limit.is_empty() {
+    if !config.time_limit.is_empty() && config.parallel == 0 {
         // --time-limit value not an empty string, need to kick off the thread that enforces
         // the limit
+        //
+        // if --parallel is used, this branch won't execute in the main process, but will in the
+        // children. This is because --parallel is stripped from the children's command line
+        // arguments, so, when spawned, they won't have --parallel, the parallel value will be set
+        // to the default of 0, and will hit this branch. This makes it so that the time limit
+        // is enforced on each individual child process, instead of the main process
         let time_handles = handles.clone();
         tokio::spawn(async move { scan_manager::start_max_time_thread(time_handles).await });
     }
@@ -301,16 +377,13 @@ async fn wrapped_main(config: Arc<Configuration>) -> Result<()> {
 
         let invocation = args();
 
-        let para_regex =
-            Regex::new("--stdin|-q|--quiet|--silent|--verbosity|-v|-vv|-vvv|-vvvv").unwrap();
+        let para_regex = Regex::new("--stdin").unwrap();
 
         // remove stdin since only the original process will process targets
         // remove quiet and silent so we can force silent later to normalize output
         let mut original = invocation
             .filter(|s| !para_regex.is_match(s))
             .collect::<Vec<String>>();
-
-        original.push("--silent".to_string()); // only output modifier allowed
 
         // we need remove --parallel from command line so we don't hit this branch over and over
         // but we must remove --parallel N manually; the filter above never sees --parallel and the
@@ -386,16 +459,32 @@ async fn wrapped_main(config: Arc<Configuration>) -> Result<()> {
 
             log::debug!("parallel exec: {} {}", bin, args.join(" "));
 
-            tokio::task::spawn_blocking(move || {
-                let result = Command::new(bin)
+            tokio::task::spawn(async move {
+                let mut output = Command::new(bin)
                     .args(&args)
+                    .stdout(Stdio::piped())
                     .spawn()
-                    .expect("failed to spawn a child process")
-                    .wait()
-                    .expect("child process errored during execution");
+                    .expect("failed to spawn a child process");
 
+                let stdout = output.stdout.take().unwrap();
+
+                let mut bufread = BufReader::new(stdout);
+                // output for a single line is a minimum of 51 bytes, so we'll start with that
+                // + a little wiggle room, and grow as needed
+                let mut buf: String = String::with_capacity(128);
+
+                while let Ok(n) = bufread.read_line(&mut buf) {
+                    if n > 0 {
+                        let trimmed = buf.trim();
+                        if !trimmed.is_empty() {
+                            println!("{}", trimmed);
+                        }
+                        buf.clear();
+                    } else {
+                        break;
+                    }
+                }
                 drop(permit);
-                result
             });
         }
 
@@ -418,6 +507,14 @@ async fn wrapped_main(config: Arc<Configuration>) -> Result<()> {
         log::trace!("exit: parallel branch && wrapped main");
         return Ok(());
     }
+
+    // in order for the Stats object to know about which targets are being scanned, we need to
+    // wait until the parallel branch has been handled before sending the UpdateTargets command
+    // this ensures that only the targets being scanned are sent to the Stats object
+    //
+    // if sent before the parallel branch is handled, the Stats object will have duplicate
+    // targets
+    handles.stats.send(UpdateTargets(targets.clone()))?;
 
     if matches!(config.output_level, OutputLevel::Default) {
         // only print banner if output level is default (no banner on --quiet|--silent)
@@ -514,6 +611,24 @@ async fn clean_up(handles: Arc<Handles>, tasks: Tasks) -> Result<()> {
     Ok(())
 }
 
+async fn update_app() -> Result<self_update::Status, Box<dyn ::std::error::Error>> {
+    let target_os = format!("{}-{}", ARCH, OS);
+    let status = tokio::task::spawn_blocking(move || {
+        self_update::backends::github::Update::configure()
+            .repo_owner("epi052")
+            .repo_name("feroxbuster")
+            .bin_name("feroxbuster")
+            .target(target_os.as_str())
+            .show_download_progress(true)
+            .current_version(cargo_crate_version!())
+            .build()?
+            .update()
+    })
+    .await??;
+
+    Ok(status)
+}
+
 fn main() -> Result<()> {
     let config = Arc::new(Configuration::new().with_context(|| "Could not create Configuration")?);
 
@@ -559,7 +674,7 @@ fn main() -> Result<()> {
                 // print the banner to stderr
                 let std_stderr = stderr(); // std::io::stderr
                 let banner = Banner::new(&targets, &config);
-                if !config.quiet && !config.silent {
+                if (!config.quiet && !config.silent) || config.parallel != 0 {
                     banner.print_to(std_stderr, config).unwrap();
                 }
             }

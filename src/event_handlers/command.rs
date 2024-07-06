@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::StatusCode;
 use tokio::sync::oneshot::Sender;
@@ -24,7 +25,9 @@ pub enum Command {
     AddStatus(StatusCode),
 
     /// Create the progress bar (`BarType::Total`) that is updated from the stats thread
-    CreateBar,
+    ///
+    /// the u64 value is the offset at which to start the progress bar (can be 0)
+    CreateBar(u64),
 
     /// Add to a `Stats` field that corresponds to the given `StatField` by the given `usize` value
     AddToUsizeField(StatField, usize),
@@ -83,4 +86,10 @@ pub enum Command {
     /// Give a handler access to an Arc<Handles> instance after the handler has
     /// already been initialized
     AddHandles(Arc<Handles>),
+
+    /// inform the Stats object about which targets are being scanned
+    UpdateTargets(Vec<String>),
+
+    /// query the Stats handler about the position of the overall progress bar
+    QueryOverallBarEta(Sender<Duration>),
 }

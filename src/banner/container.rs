@@ -1,14 +1,15 @@
 use super::entry::BannerEntry;
 use crate::{
+    client,
     config::Configuration,
     event_handlers::Handles,
-    utils::{logged_request, status_colorizer},
-    DEFAULT_IGNORED_EXTENSIONS, DEFAULT_METHOD, VERSION,
+    utils::{make_request, parse_url_with_raw_path, status_colorizer},
+    DEFAULT_IGNORED_EXTENSIONS, DEFAULT_METHOD, DEFAULT_STATUS_CODES, VERSION,
 };
 use anyhow::{bail, Result};
 use console::{style, Emoji};
-use reqwest::Url;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::{io::Write, sync::Arc};
 
 /// Url used to query github's api; specifically used to look for the latest tagged release name
@@ -58,6 +59,15 @@ pub struct Banner {
 
     /// represents Configuration.proxy
     proxy: BannerEntry,
+
+    /// represents Configuration.client_key
+    client_key: BannerEntry,
+
+    /// represents Configuration.client_cert
+    client_cert: BannerEntry,
+
+    /// represents Configuration.server_certs
+    server_certs: BannerEntry,
 
     /// represents Configuration.replay_proxy
     replay_proxy: BannerEntry,
@@ -204,12 +214,25 @@ impl Banner {
             ));
         }
 
-        let mut codes = vec![];
-        for code in &config.status_codes {
-            codes.push(status_colorizer(&code.to_string()))
-        }
-        let status_codes =
-            BannerEntry::new("👌", "Status Codes", &format!("[{}]", codes.join(", ")));
+        // the +2 is for the 2 experimental status codes we add to the default list manually
+        let status_codes = if config.status_codes.len() == DEFAULT_STATUS_CODES.len() + 2 {
+            let all_str = format!(
+                "{} {} {}{}",
+                style("All").cyan(),
+                style("Status").green(),
+                style("Codes").yellow(),
+                style("!").red()
+            );
+            BannerEntry::new("👌", "Status Codes", &all_str)
+        } else {
+            let mut codes = vec![];
+
+            for code in &config.status_codes {
+                codes.push(status_colorizer(&code.to_string()))
+            }
+
+            BannerEntry::new("👌", "Status Codes", &format!("[{}]", codes.join(", ")))
+        };
 
         for code in &config.filter_status {
             code_filters.push(status_colorizer(&code.to_string()))
@@ -310,6 +333,13 @@ impl Banner {
         let auto_bail = BannerEntry::new("🙅", "Auto Bail", &config.auto_bail.to_string());
         let cfg = BannerEntry::new("💉", "Config File", &config.config);
         let proxy = BannerEntry::new("💎", "Proxy", &config.proxy);
+        let server_certs = BannerEntry::new(
+            "🏅",
+            "Server Certificates",
+            &format!("[{}]", config.server_certs.join(", ")),
+        );
+        let client_cert = BannerEntry::new("🏅", "Client Certificate", &config.client_cert);
+        let client_key = BannerEntry::new("🔑", "Client Key", &config.client_key);
         let threads = BannerEntry::new("🚀", "Threads", &config.threads.to_string());
         let wordlist = BannerEntry::new("📖", "Wordlist", &config.wordlist);
         let timeout = BannerEntry::new("💥", "Timeout (secs)", &config.timeout.to_string());
@@ -389,6 +419,9 @@ impl Banner {
             auto_bail,
             auto_tune,
             proxy,
+            client_cert,
+            client_key,
+            server_certs,
             replay_codes,
             replay_proxy,
             headers,
@@ -465,9 +498,36 @@ by Ben "epi" Risher {}                 ver: {}"#,
     pub async fn check_for_updates(&mut self, url: &str, handles: Arc<Handles>) -> Result<()> {
         log::trace!("enter: needs_update({}, {:?})", url, handles);
 
-        let api_url = Url::parse(url)?;
+        let api_url = parse_url_with_raw_path(url)?;
 
-        let result = logged_request(&api_url, DEFAULT_METHOD, None, handles.clone()).await?;
+        // we don't want to leak sensitive header info / include auth headers
+        // with the github api request, so we'll build a client specifically
+        // for this task. thanks to @stuhlmann for the suggestion!
+        let client = client::initialize(
+            handles.config.timeout,
+            "feroxbuster-update-check",
+            handles.config.redirects,
+            handles.config.insecure,
+            &HashMap::new(),
+            Some(&handles.config.proxy),
+            &handles.config.server_certs,
+            Some(&handles.config.client_cert),
+            Some(&handles.config.client_key),
+        )?;
+        let level = handles.config.output_level;
+        let tx_stats = handles.stats.tx.clone();
+
+        let result = make_request(
+            &client,
+            &api_url,
+            DEFAULT_METHOD,
+            None,
+            level,
+            &handles.config,
+            tx_stats,
+        )
+        .await?;
+
         let body = result.text().await?;
 
         let json_response: Value = serde_json::from_str(&body)?;
@@ -541,6 +601,18 @@ by Ben "epi" Risher {}                 ver: {}"#,
 
         if !config.proxy.is_empty() {
             writeln!(&mut writer, "{}", self.proxy)?;
+        }
+
+        if !config.client_cert.is_empty() {
+            writeln!(&mut writer, "{}", self.client_cert)?;
+        }
+
+        if !config.client_key.is_empty() {
+            writeln!(&mut writer, "{}", self.client_key)?;
+        }
+
+        if !config.server_certs.is_empty() {
+            writeln!(&mut writer, "{}", self.server_certs)?;
         }
 
         if !config.replay_proxy.is_empty() {

@@ -21,7 +21,7 @@ use crate::{
     event_handlers::{Command, Handles},
     traits::FeroxSerialize,
     url::FeroxUrl,
-    utils::{self, fmt_err, status_colorizer},
+    utils::{self, fmt_err, parse_url_with_raw_path, status_colorizer, timestamp},
     CommandSender,
 };
 
@@ -63,6 +63,9 @@ pub struct FeroxResponse {
 
     /// Url's file extension, if one exists
     pub(crate) extension: Option<String>,
+
+    /// Timestamp of when this response was received
+    timestamp: f64,
 }
 
 /// implement Default trait for FeroxResponse
@@ -82,6 +85,7 @@ impl Default for FeroxResponse {
             wildcard: false,
             output_level: Default::default(),
             extension: None,
+            timestamp: timestamp(),
         }
     }
 }
@@ -138,9 +142,14 @@ impl FeroxResponse {
         self.content_length
     }
 
+    /// Get the timestamp of this response
+    pub fn timestamp(&self) -> f64 {
+        self.timestamp
+    }
+
     /// Set `FeroxResponse`'s `url` attribute, has no affect if an error occurs
     pub fn set_url(&mut self, url: &str) {
-        match Url::parse(url) {
+        match parse_url_with_raw_path(url) {
             Ok(url) => {
                 self.url = url;
             }
@@ -170,7 +179,8 @@ impl FeroxResponse {
 
     /// free the `text` data, reducing memory usage
     pub fn drop_text(&mut self) {
-        self.text = String::new();
+        self.text.clear(); // length is set to 0
+        self.text.shrink_to_fit(); // allocated capacity shrinks to reflect the new size
     }
 
     /// Make a reasonable guess at whether the response is a file or not
@@ -215,6 +225,7 @@ impl FeroxResponse {
         let status = response.status();
         let headers = response.headers().clone();
         let content_length = response.content_length().unwrap_or(0);
+        let timestamp = timestamp();
 
         // .text() consumes the response, must be called last
         let text = response
@@ -247,6 +258,7 @@ impl FeroxResponse {
             output_level,
             wildcard: false,
             extension: None,
+            timestamp,
         }
     }
 
@@ -394,7 +406,14 @@ impl FeroxResponse {
     pub fn send_report(self, report_sender: CommandSender) -> Result<()> {
         log::trace!("enter: send_report({:?}", report_sender);
 
-        report_sender.send(Command::Report(Box::new(self)))?;
+        // there's no reason to send the response body across the mpsc
+        //
+        // the only possible reason is for filtering on the body, but both `send_report`
+        // calls are gated behind checks for `should_filter_response`
+        let mut me = self;
+        me.drop_text();
+
+        report_sender.send(Command::Report(Box::new(me)))?;
 
         log::trace!("exit: send_report");
         Ok(())
@@ -415,8 +434,12 @@ impl FeroxSerialize for FeroxResponse {
         let mut url_with_redirect = match (
             self.status().is_redirection(),
             self.headers().get("Location").is_some(),
+            matches!(
+                self.output_level,
+                OutputLevel::Silent | OutputLevel::SilentJSON
+            ),
         ) {
-            (true, true) => {
+            (true, true, false) => {
                 // redirect with Location header, show where it goes if possible
                 let loc = self
                     .headers()
@@ -453,7 +476,7 @@ impl FeroxSerialize for FeroxResponse {
 
             // create the base message
             let mut message = format!(
-                "{} {:>8} {:>8}l {:>8}w {:>8}c Got {} for {} (url length: {})\n",
+                "{} {:>8} {:>8}l {:>8}w {:>8}c Got {} for {}\n",
                 wild_status,
                 method,
                 lines,
@@ -461,7 +484,6 @@ impl FeroxSerialize for FeroxResponse {
                 chars,
                 status_colorizer(status),
                 self.url(),
-                FeroxUrl::path_length_of_url(&self.url)
             );
 
             if self.status().is_redirection() {
@@ -478,15 +500,19 @@ impl FeroxSerialize for FeroxResponse {
             message
         } else {
             // not a wildcard, just create a normal entry
-            utils::create_report_string(
-                self.status.as_str(),
-                method,
-                &lines,
-                &words,
-                &chars,
-                &url_with_redirect,
-                self.output_level,
-            )
+            if matches!(self.output_level, OutputLevel::SilentJSON) {
+                self.as_json().unwrap_or_default()
+            } else {
+                utils::create_report_string(
+                    self.status.as_str(),
+                    method,
+                    &lines,
+                    &words,
+                    &chars,
+                    &url_with_redirect,
+                    self.output_level,
+                )
+            }
         }
     }
 
@@ -559,6 +585,7 @@ impl Serialize for FeroxResponse {
             "extension",
             self.extension.as_ref().unwrap_or(&String::new()),
         )?;
+        state.serialize_field("timestamp", &self.timestamp)?;
 
         state.end()
     }
@@ -584,6 +611,7 @@ impl<'de> Deserialize<'de> for FeroxResponse {
             line_count: 0,
             word_count: 0,
             extension: None,
+            timestamp: timestamp(),
         };
 
         let map: HashMap<String, Value> = HashMap::deserialize(deserializer)?;
@@ -592,7 +620,7 @@ impl<'de> Deserialize<'de> for FeroxResponse {
             match key.as_str() {
                 "url" => {
                     if let Some(url) = value.as_str() {
-                        if let Ok(parsed) = Url::parse(url) {
+                        if let Ok(parsed) = parse_url_with_raw_path(url) {
                             response.url = parsed;
                         }
                     }
@@ -655,6 +683,11 @@ impl<'de> Deserialize<'de> for FeroxResponse {
                 "extension" => {
                     if let Some(result) = value.as_str() {
                         response.extension = Some(result.to_string());
+                    }
+                }
+                "timestamp" => {
+                    if let Some(result) = value.as_f64() {
+                        response.timestamp = result;
                     }
                 }
                 _ => {}

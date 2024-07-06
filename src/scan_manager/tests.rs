@@ -10,7 +10,7 @@ use crate::{
     scanner::RESPONSES,
     statistics::Stats,
     traits::FeroxSerialize,
-    SIMILARITY_THRESHOLD, SLEEP_DURATION, VERSION,
+    SLEEP_DURATION, VERSION,
 };
 use indicatif::ProgressBar;
 use predicates::prelude::*;
@@ -72,7 +72,7 @@ fn add_url_to_list_of_scanned_urls_with_known_url() {
         url,
         ScanType::Directory,
         ScanOrder::Latest,
-        pb.length(),
+        pb.length().unwrap(),
         OutputLevel::Default,
         Some(pb),
     );
@@ -94,7 +94,7 @@ fn stop_progress_bar_stops_bar() {
         url,
         ScanType::Directory,
         ScanOrder::Latest,
-        pb.length(),
+        pb.length().unwrap(),
         OutputLevel::Default,
         Some(pb),
     );
@@ -152,7 +152,7 @@ async fn call_display_scans() {
         url,
         ScanType::Directory,
         ScanOrder::Latest,
-        pb.length(),
+        pb.length().unwrap(),
         OutputLevel::Default,
         Some(pb),
     );
@@ -160,7 +160,7 @@ async fn call_display_scans() {
         url_two,
         ScanType::Directory,
         ScanOrder::Latest,
-        pb_two.length(),
+        pb_two.length().unwrap(),
         OutputLevel::Default,
         Some(pb_two),
     );
@@ -202,6 +202,7 @@ fn partial_eq_compares_the_id_field() {
 
     assert!(!scan.eq(&scan_two));
 
+    #[allow(clippy::redundant_clone)]
     let scan_two = scan.clone();
 
     assert!(scan.eq(&scan_two));
@@ -224,7 +225,7 @@ fn ferox_scan_get_progress_bar_when_none_is_set() {
 /// given a JSON entry representing a FeroxScan, test that it deserializes into the proper type
 /// with the right attributes
 fn ferox_scan_deserialize() {
-    let fs_json = r#"{"id":"057016a14769414aac9a7a62707598cb","url":"https://spiritanimal.com","scan_type":"Directory","status":"Complete"}"#;
+    let fs_json = r#"{"id":"057016a14769414aac9a7a62707598cb","url":"https://spiritanimal.com","scan_type":"Directory","status":"Complete","requests_made_so_far":500}"#;
     let fs_json_two = r#"{"id":"057016a14769414aac9a7a62707598cb","url":"https://spiritanimal.com","scan_type":"Not Correct","status":"Cancelled"}"#;
     let fs_json_three = r#"{"id":"057016a14769414aac9a7a62707598cb","url":"https://spiritanimal.com","scan_type":"Not Correct","status":"","num_requests":42}"#;
 
@@ -246,9 +247,13 @@ fn ferox_scan_deserialize() {
         ScanType::File => {}
     }
 
-    match *fs.progress_bar.lock().unwrap() {
-        None => {}
-        Some(_) => {
+    match fs.progress_bar.lock() {
+        Ok(guard) => {
+            if guard.is_some() {
+                panic!();
+            }
+        }
+        Err(_) => {
             panic!();
         }
     }
@@ -277,7 +282,7 @@ fn ferox_scan_serialize() {
         None,
     );
     let fs_json = format!(
-        r#"{{"id":"{}","url":"https://spiritanimal.com","normalized_url":"https://spiritanimal.com/","scan_type":"Directory","status":"NotStarted","num_requests":0}}"#,
+        r#"{{"id":"{}","url":"https://spiritanimal.com","normalized_url":"https://spiritanimal.com/","scan_type":"Directory","status":"NotStarted","num_requests":0,"requests_made_so_far":0}}"#,
         fs.id
     );
     assert_eq!(fs_json, serde_json::to_string(&*fs).unwrap());
@@ -296,7 +301,7 @@ fn ferox_scans_serialize() {
     );
     let ferox_scans = FeroxScans::default();
     let ferox_scans_json = format!(
-        r#"[{{"id":"{}","url":"https://spiritanimal.com","normalized_url":"https://spiritanimal.com/","scan_type":"Directory","status":"NotStarted","num_requests":0}}]"#,
+        r#"[{{"id":"{}","url":"https://spiritanimal.com","normalized_url":"https://spiritanimal.com/","scan_type":"Directory","status":"NotStarted","num_requests":0,"requests_made_so_far":0}}]"#,
         ferox_scan.id
     );
     ferox_scans.scans.write().unwrap().push(ferox_scan);
@@ -309,7 +314,7 @@ fn ferox_scans_serialize() {
 #[test]
 /// given a FeroxResponses, test that it serializes into the proper JSON entry
 fn ferox_responses_serialize() {
-    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","original_url":"https://nerdcore.com","path":"/css","wildcard":true,"status":301,"method":"GET","content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":""}"#;
+    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","original_url":"https://nerdcore.com","path":"/css","wildcard":true,"status":301,"method":"GET","content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":"","timestamp":1711796681.3455093}"#;
     let response: FeroxResponse = serde_json::from_str(json_response).unwrap();
 
     let responses = FeroxResponses::default();
@@ -327,7 +332,7 @@ fn ferox_responses_serialize() {
 /// given a FeroxResponse, test that it serializes into the proper JSON entry
 fn ferox_response_serialize_and_deserialize() {
     // deserialize
-    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","original_url":"https://nerdcore.com","path":"/css","wildcard":true,"status":301,"method":"GET","content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":""}"#;
+    let json_response = r#"{"type":"response","url":"https://nerdcore.com/css","original_url":"https://nerdcore.com","path":"/css","wildcard":true,"status":301,"method":"GET","content_length":173,"line_count":10,"word_count":16,"headers":{"server":"nginx/1.16.1"},"extension":"","timestamp":1711796681.3455093}"#;
     let response: FeroxResponse = serde_json::from_str(json_response).unwrap();
 
     assert_eq!(response.url().as_str(), "https://nerdcore.com/css");
@@ -338,6 +343,7 @@ fn ferox_response_serialize_and_deserialize() {
     assert_eq!(response.line_count(), 10);
     assert_eq!(response.word_count(), 16);
     assert_eq!(response.headers().get("server").unwrap(), "nginx/1.16.1");
+    assert_eq!(response.timestamp(), 1711796681.3455093);
 
     // serialize, however, this can fail when headers are out of order
     let new_json = serde_json::to_string(&response).unwrap();
@@ -399,8 +405,7 @@ fn feroxstates_feroxserialize_implementation() {
         .unwrap();
     filters
         .push(Box::new(SimilarityFilter {
-            hash: "3:YKEpn:Yfp".to_string(),
-            threshold: SIMILARITY_THRESHOLD,
+            hash: 1,
             original_url: "http://localhost:12345/".to_string(),
         }))
         .unwrap();
@@ -442,8 +447,8 @@ fn feroxstates_feroxserialize_implementation() {
         r#""proxy":"""#,
         r#""replay_proxy":"""#,
         r#""target_url":"""#,
-        r#""status_codes":[200,204,301,302,307,308,401,403,405,500]"#,
-        r#""replay_codes":[200,204,301,302,307,308,401,403,405,500]"#,
+        r#""status_codes":[100,101,102,200,201,202,203,204,205,206,207,208,226,300,301,302,303,304,305,307,308,400,401,402,403,404,405,406,407,408,409,410,411,412,413,414,415,416,417,418,421,422,423,424,426,428,429,431,451,500,501,502,503,504,505,506,507,508,510,511,103,425]"#,
+        r#""replay_codes":[100,101,102,200,201,202,203,204,205,206,207,208,226,300,301,302,303,304,305,307,308,400,401,402,403,404,405,406,407,408,409,410,411,412,413,414,415,416,417,418,421,422,423,424,426,428,429,431,451,500,501,502,503,504,505,506,507,508,510,511,103,425]"#,
         r#""filter_status":[]"#,
         r#""threads":50"#,
         r#""timeout":7"#,
@@ -466,7 +471,7 @@ fn feroxstates_feroxserialize_implementation() {
         r#""headers""#,
         r#""queries":[]"#,
         r#""no_recursion":false"#,
-        r#""extract_links":false"#,
+        r#""extract_links":true"#,
         r#""add_slash":false"#,
         r#""stdin":false"#,
         r#""depth":4"#,
@@ -486,6 +491,9 @@ fn feroxstates_feroxserialize_implementation() {
         r#""url_denylist":[]"#,
         r#""responses""#,
         r#""type":"response""#,
+        r#""client_cert":"""#,
+        r#""client_key":"""#,
+        r#""server_certs":[]"#,
         r#""url":"https://nerdcore.com/css""#,
         r#""path":"/css""#,
         r#""wildcard":true"#,
@@ -499,7 +507,7 @@ fn feroxstates_feroxserialize_implementation() {
         r#""collect_extensions":true"#,
         r#""collect_backups":false"#,
         r#""collect_words":false"#,
-        r#""filters":[{"filter_code":100},{"word_count":200},{"content_length":300},{"line_count":400},{"compiled":".*","raw_string":".*"},{"hash":"3:YKEpn:Yfp","threshold":95,"original_url":"http://localhost:12345/"}]"#,
+        r#""filters":[{"filter_code":100},{"word_count":200},{"content_length":300},{"line_count":400},{"compiled":".*","raw_string":".*"},{"hash":1,"original_url":"http://localhost:12345/"}]"#,
         r#""collected_extensions":["php"]"#,
         r#""dont_collect":["tif","tiff","ico","cur","bmp","webp","svg","png","jpg","jpeg","jfif","gif","avif","apng","pjpeg","pjp","mov","wav","mpg","mpeg","mp3","mp4","m4a","m4p","m4v","ogg","webm","ogv","oga","flac","aac","3gp","css","zip","xls","xml","gz","tgz"]"#,
     ]
@@ -560,6 +568,7 @@ fn feroxscan_display() {
         scan_order: ScanOrder::Latest,
         scan_type: Default::default(),
         num_requests: 0,
+        requests_made_so_far: 0,
         start_time: Instant::now(),
         output_level: OutputLevel::Default,
         status_403s: Default::default(),
@@ -605,6 +614,7 @@ async fn ferox_scan_abort() {
         scan_order: ScanOrder::Latest,
         scan_type: Default::default(),
         num_requests: 0,
+        requests_made_so_far: 0,
         start_time: Instant::now(),
         output_level: OutputLevel::Default,
         status_403s: Default::default(),
@@ -636,9 +646,7 @@ fn menu_print_header_and_footer() {
     let menu_cmd_2 = MenuCmd::Cancel(vec![0], false);
     let menu_cmd_res_1 = MenuCmdResult::Url(String::from("http://localhost"));
     let menu_cmd_res_2 = MenuCmdResult::NumCancelled(2);
-    println!(
-        "{menu_cmd_1:?}{menu_cmd_2:?}{menu_cmd_res_1:?}{menu_cmd_res_2:?}"
-    );
+    println!("{menu_cmd_1:?}{menu_cmd_2:?}{menu_cmd_res_1:?}{menu_cmd_res_2:?}");
     menu.clear_screen();
     menu.print_header();
     menu.print_footer();
@@ -665,11 +673,7 @@ fn menu_get_command_input_from_user_returns_cancel() {
         assert!(matches!(result, MenuCmd::Cancel(_, _)));
 
         if let MenuCmd::Cancel(canx_list, ret_force) = result {
-            if idx == 0 {
-                assert!(canx_list.is_empty());
-            } else {
-                assert_eq!(canx_list, vec![idx]);
-            }
+            assert_eq!(canx_list, vec![idx]);
             assert_eq!(force, ret_force);
         }
     }

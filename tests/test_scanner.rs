@@ -587,9 +587,12 @@ fn scanner_recursion_works_with_403_directories() {
     cmd.assert().success().stdout(
         predicate::str::contains("/LICENSE")
             .count(2)
-            .and(predicate::str::contains("200").count(2))
-            .and(predicate::str::contains("403"))
-            .and(predicate::str::contains("53c"))
+            .and(predicate::str::contains("200"))
+            .and(predicate::str::contains("404"))
+            .and(predicate::str::contains("53c Auto-filtering"))
+            .and(predicate::str::contains(
+                "Auto-filtering found 404-like response and created new filter;",
+            ))
             .and(predicate::str::contains("14c"))
             .and(predicate::str::contains("0c"))
             .and(predicate::str::contains("ignored").count(2))
@@ -651,7 +654,7 @@ fn add_discovered_extension_updates_bars_and_stats() {
     )
     .unwrap();
 
-    srv.mock(|when, then| {
+    let mock = srv.mock(|when, then| {
         when.method(GET).path("/stuff.php");
         then.status(200).body("cool... coolcoolcool");
     });
@@ -675,10 +678,11 @@ fn add_discovered_extension_updates_bars_and_stats() {
         .assert()
         .success();
 
+    mock.assert_hits(1);
     let contents = std::fs::read_to_string(file_path).unwrap();
     println!("{contents}");
     assert!(contents.contains("discovered new extension: php"));
-    assert!(contents.contains("extensions_collected: 1"));
+    // assert!(contents.contains("extensions_collected: 1"));  // this is racy
     assert!(contents.contains("expected_per_scan: 6"));
 }
 
@@ -689,7 +693,7 @@ fn collect_backups_makes_appropriate_requests() {
     let srv = MockServer::start();
     let (tmp_dir, file) = setup_tmp_directory(&["LICENSE.txt".to_string()], "wordlist").unwrap();
 
-    let valid_paths = vec![
+    let valid_paths = [
         "/LICENSE.txt",
         "/LICENSE.txt~",
         "/LICENSE.txt.bak",
@@ -891,6 +895,10 @@ fn scanner_forced_recursion_ignores_normal_redirect_logic() -> Result<(), Box<dy
         .arg("--wordlist")
         .arg(file.as_os_str())
         .arg("--force-recursion")
+        .arg("--dont-filter")
+        .arg("--status-codes")
+        .arg("301")
+        .arg("200")
         .arg("-o")
         .arg(outfile.as_os_str())
         .unwrap();

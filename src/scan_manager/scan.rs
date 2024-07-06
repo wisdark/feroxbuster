@@ -39,10 +39,17 @@ pub struct FeroxScan {
     pub scan_type: ScanType,
 
     /// The order in which the scan was received
+    #[allow(dead_code)] // not entirely sure this isn't used somewhere
     pub(crate) scan_order: ScanOrder,
 
     /// Number of requests to populate the progress bar with
     pub(super) num_requests: u64,
+
+    /// Number of requests made so far, only used during deserialization
+    ///
+    /// serialization: saves self.requests() to this field
+    /// deserialization: sets self.requests_made_so_far to this field
+    pub(super) requests_made_so_far: u64,
 
     /// Status of this scan
     pub status: Mutex<ScanStatus>,
@@ -80,6 +87,7 @@ impl Default for FeroxScan {
             task: sync::Mutex::new(None), // tokio mutex
             status: Mutex::new(ScanStatus::default()),
             num_requests: 0,
+            requests_made_so_far: 0,
             scan_order: ScanOrder::Latest,
             url: String::new(),
             normalized_url: String::new(),
@@ -102,7 +110,7 @@ impl FeroxScan {
 
         match self.task.try_lock() {
             Ok(mut guard) => {
-                if let Some(task) = std::mem::replace(&mut *guard, None) {
+                if let Some(task) = guard.take() {
                     log::trace!("aborting {:?}", self);
                     task.abort();
                     self.set_status(ScanStatus::Cancelled)?;
@@ -120,6 +128,11 @@ impl FeroxScan {
     /// getter for url
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// getter for number of requests made during previously saved scans (i.e. --resume-from used)
+    pub fn requests_made_so_far(&self) -> u64 {
+        self.requests_made_so_far
     }
 
     /// small wrapper to set the JoinHandle
@@ -141,7 +154,13 @@ impl FeroxScan {
     pub(super) fn stop_progress_bar(&self) {
         if let Ok(guard) = self.progress_bar.lock() {
             if guard.is_some() {
-                (*guard).as_ref().unwrap().finish_at_current_pos()
+                let pb = (*guard).as_ref().unwrap();
+
+                if pb.position() > self.num_requests {
+                    pb.finish()
+                } else {
+                    pb.abandon()
+                }
             }
         }
     }
@@ -156,11 +175,13 @@ impl FeroxScan {
                     let bar_type = match self.output_level {
                         OutputLevel::Default => BarType::Default,
                         OutputLevel::Quiet => BarType::Quiet,
-                        OutputLevel::Silent => BarType::Hidden,
+                        OutputLevel::Silent | OutputLevel::SilentJSON => BarType::Hidden,
                     };
 
                     let pb = add_bar(&self.url, self.num_requests, bar_type);
                     pb.reset_elapsed();
+
+                    pb.set_position(self.requests_made_so_far);
 
                     let _ = std::mem::replace(&mut *guard, Some(pb.clone()));
 
@@ -173,7 +194,7 @@ impl FeroxScan {
                 let bar_type = match self.output_level {
                     OutputLevel::Default => BarType::Default,
                     OutputLevel::Quiet => BarType::Quiet,
-                    OutputLevel::Silent => BarType::Hidden,
+                    OutputLevel::Silent | OutputLevel::SilentJSON => BarType::Hidden,
                 };
 
                 let pb = add_bar(&self.url, self.num_requests, bar_type);
@@ -247,7 +268,7 @@ impl FeroxScan {
         let mut guard = self.task.lock().await;
 
         if guard.is_some() {
-            if let Some(task) = std::mem::replace(&mut *guard, None) {
+            if let Some(task) = guard.take() {
                 task.await.unwrap();
                 self.set_status(ScanStatus::Complete)
                     .unwrap_or_else(|e| log::warn!("Could not mark scan complete: {}", e))
@@ -277,7 +298,7 @@ impl FeroxScan {
             PolicyTrigger::Status403 => self.status_403s(),
             PolicyTrigger::Status429 => self.status_429s(),
             PolicyTrigger::Errors => self.errors(),
-            PolicyTrigger::TryAdjustUp => 0
+            PolicyTrigger::TryAdjustUp => 0,
         }
     }
 
@@ -354,6 +375,7 @@ impl Serialize for FeroxScan {
         state.serialize_field("scan_type", &self.scan_type)?;
         state.serialize_field("status", &self.status)?;
         state.serialize_field("num_requests", &self.num_requests)?;
+        state.serialize_field("requests_made_so_far", &self.requests())?;
 
         state.end()
     }
@@ -410,6 +432,11 @@ impl<'de> Deserialize<'de> for FeroxScan {
                 "num_requests" => {
                     if let Some(num_requests) = value.as_u64() {
                         scan.num_requests = num_requests;
+                    }
+                }
+                "requests_made_so_far" => {
+                    if let Some(requests_made_so_far) = value.as_u64() {
+                        scan.requests_made_so_far = requests_made_so_far;
                     }
                 }
                 _ => {}
@@ -504,6 +531,7 @@ mod tests {
             scan_type: ScanType::Directory,
             scan_order: ScanOrder::Initial,
             num_requests: 0,
+            requests_made_so_far: 0,
             status: Mutex::new(ScanStatus::Running),
             task: Default::default(),
             progress_bar: Mutex::new(None),

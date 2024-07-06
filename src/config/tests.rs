@@ -45,7 +45,7 @@ fn setup_config_test() -> Configuration {
             add_slash = true
             stdin = true
             dont_filter = true
-            extract_links = true
+            extract_links = false
             json = true
             save_state = false
             depth = 1
@@ -56,6 +56,10 @@ fn setup_config_test() -> Configuration {
             filter_word_count = [994, 992]
             filter_line_count = [34]
             filter_status = [201]
+            server_certs = ["/some/cert.pem", "/some/other/cert.pem"]
+            client_cert = "/some/client/cert.pem"
+            client_key = "/some/client/key.pem"
+            backup_extensions = [".save"]
         "#;
     let tmp_dir = TempDir::new().unwrap();
     let file = tmp_dir.path().join(DEFAULT_CONFIG_NAME);
@@ -98,7 +102,7 @@ fn default_configuration() {
     assert!(!config.add_slash);
     assert!(!config.force_recursion);
     assert!(!config.redirects);
-    assert!(!config.extract_links);
+    assert!(config.extract_links);
     assert!(!config.insecure);
     assert!(!config.collect_extensions);
     assert!(!config.collect_backups);
@@ -117,6 +121,10 @@ fn default_configuration() {
     assert_eq!(config.filter_line_count, Vec::<usize>::new());
     assert_eq!(config.filter_status, Vec::<u16>::new());
     assert_eq!(config.headers, HashMap::new());
+    assert_eq!(config.server_certs, Vec::<String>::new());
+    assert_eq!(config.client_cert, String::new());
+    assert_eq!(config.client_key, String::new());
+    assert_eq!(config.backup_extensions, backup_extensions());
 }
 
 #[test]
@@ -305,7 +313,7 @@ fn config_reads_add_slash() {
 /// parse the test config and see that the value parsed is correct
 fn config_reads_extract_links() {
     let config = setup_config_test();
-    assert!(config.extract_links);
+    assert!(!config.extract_links);
 }
 
 #[test]
@@ -441,6 +449,37 @@ fn config_reads_time_limit() {
 fn config_reads_resume_from() {
     let config = setup_config_test();
     assert_eq!(config.resume_from, "/some/state/file");
+}
+
+#[test]
+/// parse the test config and see that the value parsed is correct
+fn config_reads_server_certs() {
+    let config = setup_config_test();
+    assert_eq!(
+        config.server_certs,
+        ["/some/cert.pem", "/some/other/cert.pem"]
+    );
+}
+
+#[test]
+/// parse the test config and see that the value parsed is correct
+fn config_reads_backup_extensions() {
+    let config = setup_config_test();
+    assert_eq!(config.backup_extensions, [".save"]);
+}
+
+#[test]
+/// parse the test config and see that the value parsed is correct
+fn config_reads_client_cert() {
+    let config = setup_config_test();
+    assert_eq!(config.client_cert, "/some/client/cert.pem");
+}
+
+#[test]
+/// parse the test config and see that the value parsed is correct
+fn config_reads_client_key() {
+    let config = setup_config_test();
+    assert_eq!(config.client_key, "/some/client/key.pem");
 }
 
 #[test]
