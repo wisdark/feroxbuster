@@ -144,7 +144,8 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/48113936?v=4",
       "profile": "https://tib3rius.com",
       "contributions": [
-        "bug"
+        "bug",
+        "ideas"
       ]
     },
     {
@@ -829,7 +830,8 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/123986259?v=4",
       "profile": "http://lino.codes",
       "contributions": [
-        "bug"
+        "bug",
+        "ideas"
       ]
     },
     {
@@ -846,6 +848,24 @@
       "name": "swordfish0x0",
       "avatar_url": "https://avatars.githubusercontent.com/u/21209130?v=4",
       "profile": "https://github.com/swordfish0x0",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "libklein",
+      "name": "Patrick Klein",
+      "avatar_url": "https://avatars.githubusercontent.com/u/42714034?v=4",
+      "profile": "https://github.com/libklein",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "Raymond-JV",
+      "name": "Raymond",
+      "avatar_url": "https://avatars.githubusercontent.com/u/23642921?v=4",
+      "profile": "https://github.com/Raymond-JV",
       "contributions": [
         "ideas"
       ]
